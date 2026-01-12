@@ -3,7 +3,7 @@ import { TokenFormat } from '@/plugin/TokenFormatStoreClass';
 export function convertTokenToFormat(token, isExpanded = false) {
   if (token.inheritTypeLevel) delete token.type;
   const {
-    type, value, description, ...remainingTokenValues
+    type, value, description, deprecated, ...remainingTokenValues
   } = token;
   if (isExpanded) {
     const returnedToken = {};
@@ -19,6 +19,7 @@ export function convertTokenToFormat(token, isExpanded = false) {
     ...(value !== undefined ? { [TokenFormat.tokenValueKey]: value } : {}),
     ...(type ? { [TokenFormat.tokenTypeKey]: type } : {}),
     ...(description ? { [TokenFormat.tokenDescriptionKey]: description } : {}),
+    ...(deprecated !== undefined ? { [TokenFormat.tokenDeprecatedKey]: deprecated } : {}),
   };
   delete returnValue.inheritTypeLevel;
   return returnValue;

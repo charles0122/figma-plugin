@@ -8,6 +8,7 @@ export type DuplicateTokenPayload = {
   newName: string;
   value: SingleToken['value'];
   description?: string;
+  deprecated?: boolean | string;
   oldName?: string;
   shouldUpdate?: boolean;
   tokenSets: string[];
