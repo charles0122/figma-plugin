@@ -27,11 +27,13 @@ export type TokenInJSON<T extends TokenTypes = any, V = any> = {
     type: T;
     value: V;
     description?: string;
+    deprecated?: boolean | string;
   }
   | {
     $type: T;
     $value: V;
     $description?: string;
+    $deprecated?: boolean | string;
   }
 );
 
@@ -43,6 +45,7 @@ export type Tokens =
     $type?: TokenTypes;
     $value?: SingleToken['value'];
     $description?: string;
+    $deprecated?: boolean | string;
   };
 
 // @TODO fix typings
@@ -72,11 +75,12 @@ function checkForTokens({
   currentTypeLevel?: number;
 }): [(SingleToken & SingleToken & OptionalDTCGKeys)[], SingleToken & OptionalDTCGKeys | undefined] {
   let returnValue:
-  | Pick<SingleToken<false>, 'name' | 'value' | 'type' | 'description' | 'inheritTypeLevel'>
+  | Pick<SingleToken<false>, 'name' | 'value' | 'type' | 'description' | 'deprecated' | 'inheritTypeLevel'>
   | {
     type: TokenTypes;
     value: Record<string, SingleToken['value']>;
     description?: string;
+    deprecated?: boolean | string;
     inheritTypeLevel?: number;
   }
   | undefined;
@@ -86,6 +90,13 @@ function checkForTokens({
 
     if (token[TokenFormat.tokenDescriptionKey] && typeof token[TokenFormat.tokenDescriptionKey] === 'string') {
       returnValue.description = token[TokenFormat.tokenDescriptionKey] as string;
+    }
+    // Parse deprecated field - can be boolean or string
+    if (token[TokenFormat.tokenDeprecatedKey] !== undefined) {
+      const deprecatedValue = token[TokenFormat.tokenDeprecatedKey];
+      if (typeof deprecatedValue === 'boolean' || typeof deprecatedValue === 'string') {
+        returnValue.deprecated = deprecatedValue;
+      }
     }
     if (!token[TokenFormat.tokenTypeKey] && inheritType) {
       returnValue.type = inheritType as TokenTypes;
@@ -109,6 +120,13 @@ function checkForTokens({
     }, {});
     if (token[TokenFormat.tokenDescriptionKey] && typeof token[TokenFormat.tokenDescriptionKey] === 'string') {
       returnValue.description = token[TokenFormat.tokenDescriptionKey] as string;
+    }
+    // Parse deprecated field for composite tokens
+    if (token[TokenFormat.tokenDeprecatedKey] !== undefined) {
+      const deprecatedValue = token[TokenFormat.tokenDeprecatedKey];
+      if (typeof deprecatedValue === 'boolean' || typeof deprecatedValue === 'string') {
+        returnValue.deprecated = deprecatedValue;
+      }
     }
     if (!token[TokenFormat.tokenTypeKey] && inheritType) {
       returnValue.type = inheritType as TokenTypes;
@@ -178,6 +196,7 @@ export default function convertToTokenArray({ tokens }: { tokens: Tokens }) {
     if ('$value' in token) delete token.$value;
     if ('$description' in token) delete token.$description;
     if ('$type' in token) delete token.$type;
+    if ('$deprecated' in token) delete token.$deprecated;
     return token;
   });
 }

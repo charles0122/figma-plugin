@@ -15,12 +15,15 @@ export class TokenFormatStoreClass {
 
   public tokenDescriptionKey: 'description' | '$description';
 
+  public tokenDeprecatedKey: 'deprecated' | '$deprecated';
+
   public format: TokenFormatOptions;
 
   constructor() {
     this.tokenValueKey = 'value';
     this.tokenTypeKey = 'type';
     this.tokenDescriptionKey = 'description';
+    this.tokenDeprecatedKey = 'deprecated';
     this.format = TokenFormatOptions.Legacy;
   }
 
@@ -29,6 +32,7 @@ export class TokenFormatStoreClass {
     this.tokenValueKey = format === TokenFormatOptions.DTCG ? '$value' : 'value';
     this.tokenTypeKey = format === TokenFormatOptions.DTCG ? '$type' : 'type';
     this.tokenDescriptionKey = format === TokenFormatOptions.DTCG ? '$description' : 'description';
+    this.tokenDeprecatedKey = format === TokenFormatOptions.DTCG ? '$deprecated' : 'deprecated';
   };
 
   public getFormat = () => this.format;

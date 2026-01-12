@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useTranslation } from 'react-i18next';
 import {
-  Button, Heading, Textarea, Label, Stack,
+  Button, Heading, Textarea, Label, Stack, Checkbox,
 } from '@tokens-studio/ui';
 import { track } from '@/utils/analytics';
 import { Dispatch } from '../store';
@@ -369,6 +369,30 @@ function EditTokenForm({ resolvedTokens }: Props) {
     [internalEditToken],
   );
 
+  const handleDeprecatedChange = React.useCallback(
+    (checked: boolean | 'indeterminate') => {
+      if (internalEditToken) {
+        setInternalEditToken({
+          ...internalEditToken,
+          deprecated: checked === true ? true : undefined,
+        });
+      }
+    },
+    [internalEditToken],
+  );
+
+  const handleDeprecatedDescriptionChange = React.useCallback(
+    (value: string) => {
+      if (internalEditToken) {
+        setInternalEditToken({
+          ...internalEditToken,
+          deprecated: value || true,
+        });
+      }
+    },
+    [internalEditToken],
+  );
+
   const resolvedValue = React.useMemo(() => {
     if (internalEditToken) {
       return typeof internalEditToken?.value === 'string'
@@ -396,6 +420,7 @@ function EditTokenForm({ resolvedTokens }: Props) {
         track('Create token', { type: internalEditToken.type, isModifier: !!$extensions?.['studio.tokens']?.modify });
         createSingleToken({
           description: internalEditToken.description ?? internalEditToken.oldDescription,
+          deprecated: internalEditToken.deprecated,
           parent: activeTokenSet,
           name: newName,
           type,
@@ -405,6 +430,7 @@ function EditTokenForm({ resolvedTokens }: Props) {
       } else if (internalEditToken.status === EditTokenFormStatus.EDIT) {
         editSingleToken({
           description: internalEditToken.description ?? internalEditToken.oldDescription,
+          deprecated: internalEditToken.deprecated,
           parent: activeTokenSet,
           name: newName,
           oldName,
@@ -503,6 +529,7 @@ function EditTokenForm({ resolvedTokens }: Props) {
         oldName = internalEditToken.initialName?.slice(0, internalEditToken.initialName?.lastIndexOf('-copy'));
         duplicateSingleToken({
           description: internalEditToken.description ?? internalEditToken.oldDescription,
+          deprecated: internalEditToken.deprecated,
           parent: activeTokenSet,
           newName,
           oldName,
@@ -702,6 +729,28 @@ function EditTokenForm({ resolvedTokens }: Props) {
             rows={3}
             css={{ fontSize: '$xsmall', padding: '$3' }}
           />
+        </Box>
+        <Box>
+          <Stack direction="row" gap={2} align="center" css={{ marginBottom: '$2' }}>
+            <Checkbox
+              id="deprecated-checkbox"
+              checked={!!internalEditToken?.deprecated}
+              onCheckedChange={handleDeprecatedChange}
+            />
+            <Label htmlFor="deprecated-checkbox" css={{ cursor: 'pointer' }}>
+              {t('deprecated', { ns: 'tokens' })}
+            </Label>
+          </Stack>
+          {internalEditToken?.deprecated && (
+            <Textarea
+              key="deprecated-description"
+              value={typeof internalEditToken.deprecated === 'string' ? internalEditToken.deprecated : ''}
+              placeholder={t('deprecatedDescriptionPlaceholder', { ns: 'tokens' })}
+              onChange={handleDeprecatedDescriptionChange}
+              rows={2}
+              css={{ fontSize: '$xsmall', padding: '$3' }}
+            />
+          )}
         </Box>
         {internalEditToken.status === EditTokenFormStatus.DUPLICATE && (
           <Box>

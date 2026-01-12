@@ -9,6 +9,7 @@ export type SingleGenericToken<T extends TokenTypes, V = string, Named extends b
   description?: string;
   oldDescription?: string;
   oldValue?: V;
+  deprecated?: boolean | string;
   internal__Parent?: string;
   inheritTypeLevel?: number;
   $extensions?: {
