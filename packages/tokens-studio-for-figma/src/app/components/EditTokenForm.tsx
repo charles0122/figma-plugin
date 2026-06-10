@@ -43,6 +43,8 @@ import { ColorModifier } from '@/types/Modifier';
 import { MultiSelectDropdown } from './MultiSelectDropdown';
 import { tokenTypesToCreateVariable } from '@/constants/VariableTypes';
 import { ModalOptions } from '@/constants/ModalOptions';
+import { TokenReferencesList } from './TokenReferencesList';
+import { useTokenReferences } from '@/app/hooks/useTokenReferences';
 
 let lastUsedRenameOption: UpdateMode = UpdateMode.SELECTION;
 let lastUsedRenameStyles = false;
@@ -61,6 +63,7 @@ function EditTokenForm({ resolvedTokens }: Props) {
   const editToken = useSelector(editTokenSelector);
   const themes = useSelector(themesListSelector);
   const [selectedTokenSets, setSelectedTokenSets] = React.useState<string[]>([activeTokenSet]);
+  const { references } = useTokenReferences(editToken?.initialName || editToken?.name || '');
   const {
     editSingleToken, createSingleToken, duplicateSingleToken, renameTokensAcrossSets,
   } = useManageTokens();
@@ -752,6 +755,9 @@ function EditTokenForm({ resolvedTokens }: Props) {
             />
           )}
         </Box>
+        {internalEditToken.status === EditTokenFormStatus.EDIT && references.length > 0 && (
+          <TokenReferencesList references={references} />
+        )}
         {internalEditToken.status === EditTokenFormStatus.DUPLICATE && (
           <Box>
             <Label>{t('set', { ns: 'general' })}</Label>

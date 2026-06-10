@@ -1,4 +1,6 @@
-import { findMatchingReferences, findReferences, replaceReferences } from './findReferences';
+import { findMatchingReferences, findReferences, replaceReferences, findReverseReferences } from './findReferences';
+import { TokenTypes } from '@/constants/TokenTypes';
+import { SingleToken } from '@/types/tokens';
 
 describe('findReferences', () => {
   it('returns references in a string', () => {
@@ -58,5 +60,49 @@ describe('replaceReferences', () => {
     expect(replaceReferences('{colors.blue} * {colors.red}', 'colors.other', 'colors.yellow')).toEqual(
       '{colors.blue} * {colors.red}',
     );
+  });
+});
+
+describe('findReverseReferences', () => {
+  const mockTokens: SingleToken[] = [
+    { name: 'colors.primary', value: '#ff0000', type: TokenTypes.COLOR, internal__Parent: 'global' },
+    { name: 'colors.secondary', value: '{colors.primary}', type: TokenTypes.COLOR, internal__Parent: 'global' },
+    { name: 'colors.tertiary', value: 'rgba({colors.primary}, 0.5)', type: TokenTypes.COLOR, internal__Parent: 'global' },
+    { name: 'spacing.small', value: '8px', type: TokenTypes.SPACING, internal__Parent: 'global' },
+    { name: 'typography.heading', value: { fontFamily: '{fonts.primary}', fontSize: '16px' }, type: TokenTypes.TYPOGRAPHY, internal__Parent: 'theme' },
+  ] as SingleToken[];
+
+  it('finds tokens that reference the specified token', () => {
+    const references = findReverseReferences('colors.primary', mockTokens);
+    expect(references).toHaveLength(2);
+    expect(references.map((r) => r.name)).toContain('colors.secondary');
+    expect(references.map((r) => r.name)).toContain('colors.tertiary');
+  });
+
+  it('returns empty array when no references exist', () => {
+    const references = findReverseReferences('spacing.small', mockTokens);
+    expect(references).toHaveLength(0);
+  });
+
+  it('excludes self from results', () => {
+    const references = findReverseReferences('colors.secondary', mockTokens);
+    expect(references.map((r) => r.name)).not.toContain('colors.secondary');
+  });
+
+  it('finds references in complex token values like typography', () => {
+    const tokensWithFontRef: SingleToken[] = [
+      { name: 'fonts.primary', value: 'Inter', type: TokenTypes.FONT_FAMILIES, internal__Parent: 'global' },
+      { name: 'typography.heading', value: { fontFamily: '{fonts.primary}', fontSize: '16px' }, type: TokenTypes.TYPOGRAPHY, internal__Parent: 'theme' },
+    ] as SingleToken[];
+
+    const references = findReverseReferences('fonts.primary', tokensWithFontRef);
+    expect(references).toHaveLength(1);
+    expect(references[0].name).toBe('typography.heading');
+    expect(references[0].tokenSet).toBe('theme');
+  });
+
+  it('includes tokenSet in the result', () => {
+    const references = findReverseReferences('colors.primary', mockTokens);
+    expect(references.every((r) => r.tokenSet === 'global')).toBe(true);
   });
 });

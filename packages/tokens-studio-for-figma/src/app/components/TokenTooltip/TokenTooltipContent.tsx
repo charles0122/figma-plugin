@@ -7,6 +7,7 @@ import Stack from '../Stack';
 import Text from '../Text';
 import { TokensContext } from '@/context';
 import NotFoundBadge from './NotFoundBadge';
+import { useTokenReferences } from '@/app/hooks/useTokenReferences';
 
 type Props = {
   token: SingleToken;
@@ -15,6 +16,7 @@ type Props = {
 export const TokenTooltipContent: React.FC<React.PropsWithChildren<React.PropsWithChildren<Props>>> = ({ token }) => {
   const { t } = useTranslation(['tokens']);
   const tokensContext = React.useContext(TokensContext);
+  const { count: referenceCount } = useTokenReferences(token.name);
 
   const failedToResolve = React.useMemo(() => (
     tokensContext.resolvedTokens.find((t) => t.name === token.name)?.failedToResolve
@@ -70,6 +72,11 @@ export const TokenTooltipContent: React.FC<React.PropsWithChildren<React.PropsWi
             {t('deprecated')}:
           </Text>
           <Text size="xsmall">{token.deprecated}</Text>
+        </Box>
+      )}
+      {referenceCount > 0 && (
+        <Box css={{ color: '$tooltipFgMuted', padding: '$1 $2', fontSize: '$xsmall' }}>
+          {t('referencedBy', { count: referenceCount })}
         </Box>
       )}
     </Stack>
