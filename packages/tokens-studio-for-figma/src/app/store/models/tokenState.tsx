@@ -31,7 +31,7 @@ import {
 } from '@/types/payloads';
 import { updateTokenPayloadToSingleToken } from '@/utils/updateTokenPayloadToSingleToken';
 import { RootModel } from '@/types/RootModel';
-import { ThemeObjectsList, UsedTokenSetsMap } from '@/types';
+import { ThemeObject, ThemeObjectsList, UsedTokenSetsMap } from '@/types';
 import { TokenSetStatus } from '@/constants/TokenSetStatus';
 import { isEqual } from '@/utils/isEqual';
 import { StorageProviderType } from '@/constants/StorageProviderType';
@@ -43,8 +43,8 @@ import { RenameTokensAcrossSetsPayload } from '@/types/payloads/RenameTokensAcro
 import { wrapTransaction } from '@/profiling/transaction';
 import addIdPropertyToTokens from '@/utils/addIdPropertyToTokens';
 import { TokenFormat, TokenFormatOptions, setFormat } from '@/plugin/TokenFormatStoreClass';
-import { pushToTokensStudio } from '../providers/tokens-studio';
-import { StorageTypeCredential, TokensStudioStorageType } from '@/types/StorageType';
+import { pushToTokensStudio, pushToTokensStudioOAuth } from '../providers/tokens-studio';
+import { StorageTypeCredential, TokensStudioStorageType, TokensStudioOAuthStorageType } from '@/types/StorageType';
 import {
   createTokenInTokensStudio,
   duplicateTokenInTokensStudio,
@@ -57,6 +57,14 @@ import { CreateSingleTokenData, EditSingleTokenData } from '../useManageTokens';
 import { singleTokensToRawTokenSet } from '@/utils/convert';
 import { checkStorageSize } from '@/utils/checkStorageSize';
 import { compareLastSyncedState } from '@/utils/compareLastSyncedState';
+import { RemoteTokenStorageMetadata } from '@/storage/RemoteTokenStorage';
+
+/** Context required to call the Studio gRPC-backed resolver endpoint */
+export interface ServerResolverContext {
+  projectId: string;
+  changeSetId: string;
+  apiBaseUrl: string;
+}
 
 export interface TokenState {
   tokens: Record<string, AnyTokenList>;
@@ -79,7 +87,7 @@ export interface TokenState {
   changedState: CompareStateType;
   remoteData: CompareStateType;
   tokenFormat: TokenFormatOptions;
-  tokenSetMetadata: Record<string, { isDynamic?: boolean }>;
+  tokenSetMetadata: Record<string, { isDynamic?: boolean; id?: string }>;
   importedThemes: {
     newThemes: ThemeObjectsList;
     updatedThemes: ThemeObjectsList;
@@ -89,6 +97,15 @@ export interface TokenState {
   tokensSize: number;
   themesSize: number;
   renamedCollections: [string, string][] | null;
+  /** Set when connected via Tokens Studio OAuth — used to call the gRPC resolver */
+  serverResolverContext: ServerResolverContext | null;
+  /**
+   * Flat map of tokenName → resolved value string, as returned by the Studio gRPC server.
+   * Only contains theme-affected tokens (delta), not the full token set.
+   * These values are merged on top of local resolution in updateSources.
+   * null = server hasn't responded yet or is unavailable → use local resolver only.
+   */
+  serverResolvedTokens: Record<string, string> | null;
 }
 
 export const tokenState = createModel<RootModel>()({
@@ -123,7 +140,7 @@ export const tokenState = createModel<RootModel>()({
       themes: [],
       metadata: null,
     },
-    tokenFormat: TokenFormatOptions.Legacy,
+    tokenFormat: TokenFormatOptions.DTCG,
     tokenSetMetadata: {},
     importedThemes: {
       newThemes: [],
@@ -134,6 +151,8 @@ export const tokenState = createModel<RootModel>()({
     tokensSize: 0,
     themesSize: 0,
     renamedCollections: null,
+    serverResolverContext: null,
+    serverResolvedTokens: null,
   } as unknown as TokenState,
   reducers: {
     setTokensSize: (state, size: number) => ({
@@ -178,7 +197,12 @@ export const tokenState = createModel<RootModel>()({
         themes: [
           ...(newThemes.length === 0 && updatedThemes.length === 0 ? data : []),
           ...state.themes.map((existingTheme) => {
-            const updateTheme = updatedThemes.find((importedTheme) => importedTheme.$figmaCollectionId === existingTheme.$figmaCollectionId && importedTheme.$figmaModeId === existingTheme.$figmaModeId);
+            const updateTheme = updatedThemes.find((importedTheme) => {
+              if (importedTheme.$figmaCollectionId && existingTheme.$figmaCollectionId) {
+                return importedTheme.$figmaCollectionId === existingTheme.$figmaCollectionId && importedTheme.$figmaModeId === existingTheme.$figmaModeId;
+              }
+              return importedTheme.id === existingTheme.id || (importedTheme.name === existingTheme.name && importedTheme.group === existingTheme.group);
+            });
             return updateTheme ? { ...existingTheme, ...updateTheme } : existingTheme;
           }),
           ...newThemes,
@@ -248,8 +272,8 @@ export const tokenState = createModel<RootModel>()({
     }),
     setJSONData(state, payload) {
       const parsedTokens = parseJson(payload);
-      parseTokenValues(parsedTokens);
-      const values = parseTokenValues({ [state.activeTokenSet]: parsedTokens });
+      parseTokenValues(parsedTokens, true);
+      const values = parseTokenValues({ [state.activeTokenSet]: parsedTokens }, true);
       return {
         ...state,
         tokens: {
@@ -448,9 +472,12 @@ export const tokenState = createModel<RootModel>()({
             if (oldValue) {
               const normalizedOldValueDescription = oldValue.description ?? '';
               const normalizedTokenDescription = token.description ?? '';
+              const normalizedOldValueExtensions = oldValue.$extensions ?? {};
+              const normalizedTokenExtensions = token.$extensions ?? {};
               if (
                 isEqual(oldValue.value, token.value)
                 && isEqual(normalizedOldValueDescription, normalizedTokenDescription)
+                && isEqual(normalizedOldValueExtensions, normalizedTokenExtensions)
               ) {
                 existingTokens.push(token);
               } else {
@@ -642,6 +669,28 @@ export const tokenState = createModel<RootModel>()({
       ...state,
       remoteData: data,
     }),
+    setRemoteMetadata: (state, data: RemoteTokenStorageMetadata): TokenState => ({
+      ...state,
+      remoteData: {
+        ...state.remoteData,
+        metadata: data,
+      },
+    }),
+    updateTheme: (state, { oldId, theme }: { oldId: string; theme: ThemeObject }): TokenState => {
+      const nextActiveTheme = { ...state.activeTheme };
+      Object.keys(nextActiveTheme).forEach((group) => {
+        if (nextActiveTheme[group] === oldId) nextActiveTheme[group] = theme.id;
+      });
+      return {
+        ...state,
+        themes: state.themes.map((t) => (t.id === oldId ? theme : t)),
+        activeTheme: nextActiveTheme,
+      };
+    },
+    removeTheme: (state, id: string): TokenState => ({
+      ...state,
+      themes: state.themes.filter((t) => t.id !== id),
+    }),
     setTokenFormat: (state, data: TokenFormatOptions): TokenState => ({
       ...state,
       tokenFormat: data,
@@ -678,15 +727,18 @@ export const tokenState = createModel<RootModel>()({
       const updatedThemes: ThemeObjectsList = [];
 
       themes.forEach((theme) => {
-        // Use figmaCollectionId and figmaModeId to identify themes, not just figmaCollectionId
-        const existingTheme = state.themes.find((t) => t.$figmaCollectionId === theme.$figmaCollectionId
-          && t.$figmaModeId === theme.$figmaModeId);
+        const existingTheme = state.themes.find((t) => {
+          if (t.$figmaCollectionId && theme.$figmaCollectionId) {
+            return t.$figmaCollectionId === theme.$figmaCollectionId && t.$figmaModeId === theme.$figmaModeId;
+          }
+          return t.id === theme.id || (t.name === theme.name && t.group === theme.group);
+        });
 
         if (existingTheme) {
           // Check if anything has changed that requires an update
           const needsUpdate = !isEqual(existingTheme.selectedTokenSets, theme.selectedTokenSets)
-                              || !isEqual(existingTheme.name, theme.name)
-                              || !isEqual(existingTheme.group, theme.group);
+            || !isEqual(existingTheme.name, theme.name)
+            || !isEqual(existingTheme.group, theme.group);
 
           if (needsUpdate) {
             updatedThemes.push({
@@ -717,6 +769,21 @@ export const tokenState = createModel<RootModel>()({
       compressedTokens: payload.compressedTokens,
       compressedThemes: payload.compressedThemes,
     }),
+    setServerResolverContext: (state, payload: ServerResolverContext | null): TokenState => ({
+      ...state,
+      serverResolverContext: payload,
+      // Clear cached server results whenever the context changes (e.g. branch switch)
+      serverResolvedTokens: null,
+    }),
+    setServerResolvedTokens: (state, payload: Record<string, string> | null): TokenState => {
+      if (isEqual(state.serverResolvedTokens, payload)) {
+        return state;
+      }
+      return {
+        ...state,
+        serverResolvedTokens: payload,
+      };
+    },
     ...tokenStateReducers,
   },
   effects: (dispatch) => ({
@@ -757,6 +824,25 @@ export const tokenState = createModel<RootModel>()({
           });
         }
       }
+
+      if (payload.shouldUpdate && rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        const tokenSet = rootState.tokenState.tokens[payload.parent];
+        const token = tokenSet?.find((t) => t.name === payload.name);
+        if (token) {
+          pushToTokensStudioOAuth({
+            context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+            action: token.$extensions?.id ? 'EDIT_TOKEN' : 'CREATE_TOKEN',
+            data: {
+              id: token.$extensions?.id,
+              name: token.name,
+              value: token.value,
+              type: token.type,
+              description: token.description,
+              token_set_id: (rootState.tokenState.tokenSetMetadata[payload.parent] as any)?.id,
+            },
+          });
+        }
+      }
     },
     deleteToken(payload: DeleteTokenPayload, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
@@ -773,6 +859,18 @@ export const tokenState = createModel<RootModel>()({
             data: {
               raw: rawSet,
               name: payload.parent,
+            },
+          });
+        }
+      }
+
+      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        if (payload.id) {
+          pushToTokensStudioOAuth({
+            context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+            action: 'DELETE_TOKEN',
+            data: {
+              id: payload.id,
             },
           });
         }
@@ -794,6 +892,27 @@ export const tokenState = createModel<RootModel>()({
           onTokenSetCreated: dispatch.tokenState.setTokenSetMetadata,
         });
       }
+
+      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        pushToTokensStudioOAuth({
+          context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+          action: 'CREATE_TOKEN_SET',
+          data: {
+            name,
+          },
+          successCallback: (result) => {
+            if (result?.data?.id) {
+              dispatch.tokenState.setTokenSetMetadata({
+                ...rootState.tokenState.tokenSetMetadata,
+                [name]: {
+                  id: result.data.id,
+                  isDynamic: false,
+                },
+              });
+            }
+          },
+        });
+      }
     },
     duplicateTokenSet() {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
@@ -811,6 +930,20 @@ export const tokenState = createModel<RootModel>()({
           onTokenSetUpdated: dispatch.tokenState.setTokenSetMetadata,
         });
       }
+
+      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        const tokenSetId = (rootState.tokenState.tokenSetMetadata[data.oldName] as any)?.id;
+        if (tokenSetId) {
+          pushToTokensStudioOAuth({
+            context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+            action: 'UPDATE_TOKEN_SET',
+            data: {
+              id: tokenSetId,
+              name: data.newName,
+            },
+          });
+        }
+      }
     },
     deleteTokenSet(name: string, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
@@ -822,6 +955,19 @@ export const tokenState = createModel<RootModel>()({
           onTokenSetDeleted: dispatch.tokenState.setTokenSetMetadata,
         });
       }
+
+      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        const tokenSetId = (rootState.tokenState.tokenSetMetadata[name] as any)?.id;
+        if (tokenSetId) {
+          pushToTokensStudioOAuth({
+            context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+            action: 'DELETE_TOKEN_SET',
+            data: {
+              id: tokenSetId,
+            },
+          });
+        }
+      }
     },
     setTokenSetOrder(data: string[], rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
@@ -830,10 +976,23 @@ export const tokenState = createModel<RootModel>()({
         pushToTokensStudio({
           context: rootState.uiState.api as StorageTypeCredential<TokensStudioStorageType>,
           action: 'UPDATE_TOKEN_SET_ORDER',
-          data: data.map((name, index) => ({
-            orderIndex: index,
-            path: name,
-          })),
+          data: data.map((name, index) => ({ path: name, orderIndex: index })),
+        });
+      }
+
+      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        data.forEach((name, index) => {
+          const tokenSetId = (rootState.tokenState.tokenSetMetadata[name] as any)?.id;
+          if (tokenSetId) {
+            pushToTokensStudioOAuth({
+              context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+              action: 'UPDATE_TOKEN_SET',
+              data: {
+                id: tokenSetId,
+                order_index: index,
+              },
+            });
+          }
         });
       }
     },
@@ -844,6 +1003,10 @@ export const tokenState = createModel<RootModel>()({
       if (payload.shouldUpdate) {
         dispatch.tokenState.updateDocument();
       }
+    },
+    setServerResolvedTokens() {
+      // Trigger document update whenever server-resolved tokens change
+      dispatch.tokenState.updateDocument({ shouldUpdateNodes: true, updateRemote: false });
     },
     toggleUsedTokenSet() {
       dispatch.tokenState.updateDocument({ updateRemote: false });
@@ -863,6 +1026,24 @@ export const tokenState = createModel<RootModel>()({
           payload,
         });
       }
+
+      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        const tokenSet = rootState.tokenState.tokens[payload.parent];
+        const token = tokenSet?.find((t) => t.name === payload.newName);
+        if (token) {
+          pushToTokensStudioOAuth({
+            context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+            action: 'CREATE_TOKEN',
+            data: {
+              name: token.name,
+              value: token.value,
+              type: token.type,
+              description: token.description,
+              token_set_id: (rootState.tokenState.tokenSetMetadata[payload.parent] as any)?.id,
+            },
+          });
+        }
+      }
     },
     createToken(payload: UpdateTokenPayload, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
@@ -872,6 +1053,24 @@ export const tokenState = createModel<RootModel>()({
           rootState,
           payload,
         });
+      }
+
+      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        const tokenSet = rootState.tokenState.tokens[payload.parent];
+        const token = tokenSet?.find((t) => t.name === payload.name);
+        if (token) {
+          pushToTokensStudioOAuth({
+            context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+            action: 'CREATE_TOKEN',
+            data: {
+              name: token.name,
+              value: token.value,
+              type: token.type,
+              description: token.description,
+              token_set_id: (rootState.tokenState.tokenSetMetadata[payload.parent] as any)?.id,
+            },
+          });
+        }
       }
     },
     setTokenFormat(payload: TokenFormatOptions) {
@@ -989,6 +1188,7 @@ export const tokenState = createModel<RootModel>()({
               tokenFormat: rootState.tokenState.tokenFormat,
               tokensSize: rootState.tokenState.tokensSize,
               themesSize: rootState.tokenState.themesSize,
+              serverResolvedTokens: rootState.tokenState.serverResolvedTokens,
             });
           },
         );
@@ -1010,6 +1210,24 @@ export const tokenState = createModel<RootModel>()({
             context: rootState.uiState.api as StorageTypeCredential<TokensStudioStorageType>,
             action: 'UPDATE_TOKEN_SET',
             data: { raw: rawSet, name: set },
+          });
+        }
+      }
+
+      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
+        for (const set of updatedSets) {
+          const content = updatedTokens[set];
+          content.forEach((token) => {
+            if (token.$extensions?.id) {
+              pushToTokensStudioOAuth({
+                context: rootState.uiState.api as StorageTypeCredential<TokensStudioOAuthStorageType, false>,
+                action: 'EDIT_TOKEN',
+                data: {
+                  id: token.$extensions.id,
+                  value: token.value,
+                },
+              });
+            }
           });
         }
       }
@@ -1104,7 +1322,7 @@ export const tokenState = createModel<RootModel>()({
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
         for (const [oldName, newName] of renamedCollections) {
           if (oldName in rootState.tokenState.tokens
-              || Object.keys(updatedTokens).some((key) => key === newName)) {
+            || Object.keys(updatedTokens).some((key) => key === newName)) {
             updateTokenSetInTokensStudio({
               rootState,
               data: { oldName, newName },

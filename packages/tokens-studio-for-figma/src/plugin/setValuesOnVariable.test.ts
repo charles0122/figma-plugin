@@ -181,12 +181,12 @@ describe('SetValuesOnVariable', () => {
     ] as SingleToken<true, { path: string, variableId: string }>[];
     await setValuesOnVariable(variablesInFigma, tokens, collection, mode, baseFontSize);
     // Check that the right values are called (only those that were changed)
-    expect(mockSetValueForMode).toBeCalledWith(mode, 8);
-    expect(mockSetValueForMode).toBeCalledWith(mode, {
+    expect(mockSetValueForMode).toHaveBeenCalledWith(mode, 8);
+    expect(mockSetValueForMode).toHaveBeenCalledWith(mode, {
       r: 1, g: 0, b: 0, a: 1,
     });
-    expect(mockSetValueForMode).toBeCalledWith(mode, 'foobarX');
-    expect(mockSetValueForMode).toBeCalledWith(mode, true);
+    expect(mockSetValueForMode).toHaveBeenCalledWith(mode, 'foobarX');
+    expect(mockSetValueForMode).toHaveBeenCalledWith(mode, true);
     // Check that its only called for the right items (4 changed, 4 kept the same values)
     expect(mockSetValueForMode).toHaveBeenCalledTimes(4);
   });
@@ -202,7 +202,7 @@ describe('SetValuesOnVariable', () => {
       },
     ] as SingleToken<true, { path: string, variableId: string }>[];
     await setValuesOnVariable(variablesInFigma, tokens, collection, mode, baseFontSize);
-    expect(mockCreateVariable).toBeCalledWith('button/primary/width', collection, 'FLOAT');
+    expect(mockCreateVariable).toHaveBeenCalledWith('button/primary/width', collection, 'FLOAT');
   });
 
   it('should rename variable if name and path differ and shouldRename is given', async () => {
@@ -216,10 +216,10 @@ describe('SetValuesOnVariable', () => {
         variableId: '123',
       },
     ];
-    const result = await setValuesOnVariable(variablesInFigma, tokens, collection, mode, baseFontSize, true);
+    const result = await setValuesOnVariable(variablesInFigma, tokens as any, collection, mode, baseFontSize, true);
     expect(result.renamedVariableKeys).toEqual(['123']);
     expect(variablesInFigma[0].name).toEqual('button/primary/height');
-    expect(mockCreateVariable).not.toBeCalled();
+    expect(mockCreateVariable).not.toHaveBeenCalled();
   });
 
   it('should apply fontWeight token with numeric value', async () => {
@@ -231,7 +231,387 @@ describe('SetValuesOnVariable', () => {
       type: TokenTypes.FONT_WEIGHTS,
       variableId: '1234',
     }];
-    await setValuesOnVariable(variablesInFigma, tokens, collection, mode, baseFontSize);
-    expect(mockCreateVariable).toBeCalledWith('global/fontWeight', collection, 'FLOAT');
+    await setValuesOnVariable(variablesInFigma, tokens as any, collection, mode, baseFontSize);
+    expect(mockCreateVariable).toHaveBeenCalledWith('global/fontWeight', collection, 'FLOAT');
+  });
+
+  it('should apply fontWeight token with string value and FONT_STYLE scope', async () => {
+    const mockSetValueForModeLocal = jest.fn();
+    const testStringVariable = {
+      id: 'VariableID:stringfw:1',
+      key: 'stringfw-key-1',
+      name: 'global/fontWeightStr',
+      resolvedType: 'STRING',
+      description: '',
+      variableCollectionId: collection.id,
+      valuesByMode: { 309: 'Regular' },
+      scopes: ['ALL_SCOPES'] as VariableScope[],
+      setValueForMode: mockSetValueForModeLocal,
+      setVariableCodeSyntax: jest.fn(),
+      remove: jest.fn(),
+    } as unknown as Variable;
+
+    const tokens = [{
+      name: 'global.fontWeightStr',
+      path: 'global/fontWeightStr',
+      value: 'Bold',
+      rawValue: 'Bold',
+      type: TokenTypes.FONT_WEIGHTS,
+      variableId: 'stringfw-key-1',
+    }];
+
+    await setValuesOnVariable([testStringVariable], tokens as any, collection, mode, baseFontSize);
+    expect(testStringVariable.scopes).toEqual(['FONT_STYLE']);
+    expect(mockSetValueForModeLocal).toHaveBeenCalledWith(mode, 'Bold');
+  });
+
+  describe('Variable Scopes and Code Syntax Updates', () => {
+    const mockSetVariableCodeSyntax = jest.fn();
+    let testVariable: Variable;
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      testVariable = {
+        id: 'VariableID:test:1',
+        key: 'test-key-1',
+        name: 'test/variable',
+        resolvedType: 'FLOAT',
+        description: '',
+        variableCollectionId: collection.id,
+        valuesByMode: { 309: 16 },
+        scopes: ['ALL_SCOPES'] as VariableScope[],
+        setValueForMode: mockSetValueForMode,
+        setVariableCodeSyntax: mockSetVariableCodeSyntax,
+        remove: jest.fn(),
+      } as unknown as Variable;
+    });
+
+    it('should update scopes with value change', async () => {
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '24',
+        value: '24',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.scopes': ['CORNER_RADIUS'],
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize);
+
+      // Verify scopes were updated
+      expect(testVariable.scopes).toEqual(['CORNER_RADIUS']);
+      // Verify value was updated
+      expect(mockSetValueForMode).toHaveBeenCalledWith(mode, 24);
+    });
+
+    it('should update scopes to empty array when NONE is passed', async () => {
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '24',
+        value: '24',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.scopes': ['NONE'],
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize);
+
+      // Verify scopes were updated to empty array (meaning no scopes selected in Figma)
+      expect(testVariable.scopes).toEqual([]);
+      expect(mockSetValueForMode).toHaveBeenCalledWith(mode, 24);
+    });
+
+    it('should update codeSyntax with value change', async () => {
+      const colorVariable = {
+        ...testVariable,
+        resolvedType: 'COLOR',
+        valuesByMode: {
+          309: {
+            r: 0, g: 0, b: 0, a: 1,
+          },
+        },
+      } as unknown as Variable;
+
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '#ff0000',
+        value: '#ff0000',
+        type: TokenTypes.COLOR,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.codeSyntax': {
+            Web: 'red',
+            iOS: 'UIColor.red',
+          },
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([colorVariable], tokens, collection, mode, baseFontSize);
+
+      // Verify codeSyntax was set
+      expect(mockSetVariableCodeSyntax).toHaveBeenCalledWith('WEB', 'red');
+      expect(mockSetVariableCodeSyntax).toHaveBeenCalledWith('iOS', 'UIColor.red');
+      // Verify value was updated to new color
+      expect(mockSetValueForMode).toHaveBeenCalledWith(mode, {
+        r: 1, g: 0, b: 0, a: 1,
+      });
+    });
+
+    it('should update codeSyntax with uppercase keys', async () => {
+      const colorVariable = {
+        ...testVariable,
+        resolvedType: 'COLOR',
+        valuesByMode: {
+          309: {
+            r: 0, g: 0, b: 0, a: 1,
+          },
+        },
+      } as unknown as Variable;
+
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '#ff0000',
+        value: '#ff0000',
+        type: TokenTypes.COLOR,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.codeSyntax': {
+            WEB: 'web-syntax-upper',
+            ANDROID: 'android-syntax-upper',
+            IOS: 'ios-syntax-upper',
+          },
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([colorVariable], tokens, collection, mode, baseFontSize);
+
+      // Verify codeSyntax was set
+      expect(mockSetVariableCodeSyntax).toHaveBeenCalledWith('WEB', 'web-syntax-upper');
+      expect(mockSetVariableCodeSyntax).toHaveBeenCalledWith('ANDROID', 'android-syntax-upper');
+      expect(mockSetVariableCodeSyntax).toHaveBeenCalledWith('iOS', 'ios-syntax-upper');
+
+      // Verify value was updated to new color
+      expect(mockSetValueForMode).toHaveBeenCalledWith(mode, {
+        r: 1, g: 0, b: 0, a: 1,
+      });
+    });
+
+    it('should update hiddenFromPublishing with value change', async () => {
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '24',
+        value: '24',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.hiddenFromPublishing': true,
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize);
+
+      expect(testVariable.hiddenFromPublishing).toEqual(true);
+      expect(mockSetValueForMode).toHaveBeenCalledWith(mode, 24);
+    });
+
+    it('should NOT overwrite hiddenFromPublishing when the extension key is absent', async () => {
+      // Simulate a variable that already has hiddenFromPublishing set to true in Figma
+      testVariable.hiddenFromPublishing = true;
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '24',
+        value: '24',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        // No com.figma.hiddenFromPublishing in $extensions — indeterminate state
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize);
+
+      // hiddenFromPublishing must be left untouched — NOT reset to false
+      expect(testVariable.hiddenFromPublishing).toEqual(true);
+      expect(mockSetValueForMode).toHaveBeenCalledWith(mode, 24);
+    });
+
+    it('should set hiddenFromPublishing to false when extension key is explicitly false', async () => {
+      testVariable.hiddenFromPublishing = true;
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '24',
+        value: '24',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.hiddenFromPublishing': false, // explicitly set to false
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize);
+
+      expect(testVariable.hiddenFromPublishing).toEqual(false);
+      expect(mockSetValueForMode).toHaveBeenCalledWith(mode, 24);
+    });
+
+    it('should not stamp hiddenFromPublishing when only scopes change and extension key is absent', async () => {
+      // Variable exists in Figma but was never given a hiddenFromPublishing value via token
+      // (hiddenFromPublishing is undefined — the indeterminate state)
+      const initialHiddenFromPublishing = testVariable.hiddenFromPublishing; // undefined
+
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '24',
+        value: '24',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.scopes': ['CORNER_RADIUS'], // only scopes changed — no hiddenFromPublishing key
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize);
+
+      // Scopes should have been updated
+      expect(testVariable.scopes).toEqual(['CORNER_RADIUS']);
+      // hiddenFromPublishing must remain exactly as it was — NOT set to false
+      expect(testVariable.hiddenFromPublishing).toEqual(initialHiddenFromPublishing);
+      expect(mockSetValueForMode).toHaveBeenCalledWith(mode, 24);
+    });
+
+    it('should not update when scopes remain the same', async () => {
+      testVariable.scopes = ['WIDTH_HEIGHT', 'GAP'] as VariableScope[];
+
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '16',
+        value: '16',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.scopes': ['WIDTH_HEIGHT', 'GAP'], // Same as current
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize);
+
+      // Scopes should remain the same
+      expect(testVariable.scopes).toEqual(['WIDTH_HEIGHT', 'GAP']);
+      // Value setter should NOT be called since value and metadata haven't changed
+      expect(mockSetValueForMode).not.toHaveBeenCalled();
+    });
+
+    it('should remove codeSyntax when it is cleared in token extensions', async () => {
+      (testVariable as any).codeSyntax = {
+        WEB: 'oldWebCode',
+        ANDROID: 'oldAndroidCode',
+      };
+      const mockRemoveVariableCodeSyntax = jest.fn();
+      (testVariable as any).removeVariableCodeSyntax = mockRemoveVariableCodeSyntax;
+
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '16',
+        value: '16',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.codeSyntax': {
+            Web: '', // Cleared
+            Android: undefined, // Also cleared
+            iOS: 'newIOSCode', // Added
+          },
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize);
+
+      // Verify removal calls
+      expect(mockRemoveVariableCodeSyntax).toHaveBeenCalledWith('WEB');
+      // Android: undefined in token means SKIP (for aggregation), so NOT called
+      expect(mockRemoveVariableCodeSyntax).not.toHaveBeenCalledWith('ANDROID');
+      // Verify set call
+      expect(mockSetVariableCodeSyntax).toHaveBeenCalledWith('iOS', 'newIOSCode');
+    });
+
+    it('should preserve codeSyntax when providedPlatformsByVariable indicates it is provided elsewhere', async () => {
+      // Setup current syntax
+      (testVariable as any).codeSyntax = {
+        WEB: 'preservedWebCode',
+      };
+      const mockRemoveVariableCodeSyntax = jest.fn();
+      (testVariable as any).removeVariableCodeSyntax = mockRemoveVariableCodeSyntax;
+
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '16',
+        value: '16',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.codeSyntax': {
+            Android: 'androidCode',
+          },
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      const providedPlatformsByVariable = {
+        'test.variable': new Set(['web', 'android']),
+      };
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize, false, null, {}, providedPlatformsByVariable);
+
+      // Web should NOT be removed because it's in providedPlatformsByVariable
+      expect(mockRemoveVariableCodeSyntax).not.toHaveBeenCalledWith('WEB');
+      // Android should be set
+      expect(mockSetVariableCodeSyntax).toHaveBeenCalledWith('ANDROID', 'androidCode');
+    });
+
+    it('should purge codeSyntax when NOT in providedPlatformsByVariable', async () => {
+      // Setup current syntax
+      (testVariable as any).codeSyntax = {
+        WEB: 'oldWebCode',
+      };
+      const mockRemoveVariableCodeSyntax = jest.fn();
+      (testVariable as any).removeVariableCodeSyntax = mockRemoveVariableCodeSyntax;
+
+      const tokens = [{
+        name: 'test.variable',
+        path: 'test/variable',
+        rawValue: '16',
+        value: '16',
+        type: TokenTypes.SIZING,
+        variableId: 'test-key-1',
+        $extensions: {
+          'com.figma.codeSyntax': {
+            Android: 'androidCode',
+          },
+        },
+      }] as SingleToken<true, { path: string; variableId: string }>[];
+
+      const providedPlatformsByVariable = {
+        'test.variable': new Set(['android']), // Web is missing!
+      };
+
+      await setValuesOnVariable([testVariable], tokens, collection, mode, baseFontSize, false, null, {}, providedPlatformsByVariable);
+
+      // Web SHOULD be removed
+      expect(mockRemoveVariableCodeSyntax).toHaveBeenCalledWith('WEB');
+      // Android should be set
+      expect(mockSetVariableCodeSyntax).toHaveBeenCalledWith('ANDROID', 'androidCode');
+    });
   });
 });

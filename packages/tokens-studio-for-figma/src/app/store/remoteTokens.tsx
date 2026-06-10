@@ -14,7 +14,7 @@ import { useADO } from './providers/ado';
 import useFile from '@/app/store/providers/file';
 import { BackgroundJobs } from '@/constants/BackgroundJobs';
 import {
-  activeTabSelector, apiSelector, themesListSelector, tokensSelector,
+  activeTabSelector, apiSelector, themesListSelector, tokensSelector, activeThemeSelector, usedTokenSetSelector,
 } from '@/selectors';
 import { ThemeObject, UsedTokenSetsMap } from '@/types';
 import { AsyncMessageTypes } from '@/types/AsyncMessages';
@@ -30,7 +30,7 @@ import { isEqual } from '@/utils/isEqual';
 import { categorizeError } from '@/utils/error/categorizeError';
 import usePullDialog from '../hooks/usePullDialog';
 import { Tabs } from '@/constants/Tabs';
-import { useTokensStudio } from './providers/tokens-studio';
+import { useTokensStudio, useTokensStudioOAuth } from './providers/tokens-studio';
 import { notifyToUI } from '@/plugin/notifiers';
 
 export type PushOverrides = { branch: string; commitMessage: string };
@@ -41,6 +41,7 @@ type PullTokensOptions = {
   activeTheme?: Record<string, string>;
   collapsedTokenSets?: string[] | null;
   updateLocalTokens?: boolean;
+  skipConfirmation?: boolean;
 };
 
 // @TODO typings and hooks
@@ -51,6 +52,8 @@ export default function useRemoteTokens() {
   const tokens = useSelector(tokensSelector);
   const themes = useSelector(themesListSelector);
   const activeTab = useSelector(activeTabSelector);
+  const currentActiveTheme = useSelector(activeThemeSelector);
+  const currentUsedTokenSet = useSelector(usedTokenSetSelector);
   const { showPullDialog, closePullDialog, showPullDialogError } = usePullDialog();
 
   const { setStorageType } = useStorage();
@@ -92,6 +95,12 @@ export default function useRemoteTokens() {
     pullTokensFromTokensStudio,
   } = useTokensStudio();
   const {
+    syncTokensWithTokensStudioOAuth,
+    pullTokensFromTokensStudioOAuth,
+    fetchBranchesForTokensStudio,
+    pushTokensToTokensStudioOAuth,
+  } = useTokensStudioOAuth();
+  const {
     addNewADOCredentials,
     syncTokensWithADO,
     pullTokensFromADO,
@@ -105,10 +114,11 @@ export default function useRemoteTokens() {
   const pullTokens = useCallback(
     async ({
       context = api,
-      usedTokenSet,
-      activeTheme,
+      usedTokenSet = currentUsedTokenSet,
+      activeTheme = currentActiveTheme,
       collapsedTokenSets,
       updateLocalTokens = false,
+      skipConfirmation = false,
     }: PullTokensOptions) => {
       let remoteData: RemoteResponseData<unknown> | null = null;
 
@@ -148,6 +158,11 @@ export default function useRemoteTokens() {
           }
           case StorageProviderType.TOKENS_STUDIO: {
             remoteData = await pullTokensFromTokensStudio(context);
+            dispatch.tokenState.setTokenFormat(TokenFormatOptions.DTCG);
+            break;
+          }
+          case StorageProviderType.TOKENS_STUDIO_OAUTH: {
+            remoteData = await pullTokensFromTokensStudioOAuth(context as any);
             dispatch.tokenState.setTokenFormat(TokenFormatOptions.DTCG);
             break;
           }
@@ -205,14 +220,14 @@ export default function useRemoteTokens() {
         }
         if (activeTab === Tabs.LOADING || !isEqual(tokens, remoteData.tokens) || !isEqual(themes, remoteData.themes)) {
           let shouldOverride = false;
-          if (activeTab !== Tabs.LOADING) {
+          if (activeTab !== Tabs.LOADING && !skipConfirmation) {
             dispatch.tokenState.setChangedState({
               tokens: remoteData.tokens,
               themes: remoteData.themes,
             });
-            shouldOverride = !!(await showPullDialog());
+            shouldOverride = skipConfirmation ? true : !!(await showPullDialog());
           }
-          if (shouldOverride || activeTab === Tabs.LOADING) {
+          if (shouldOverride || activeTab === Tabs.LOADING || skipConfirmation) {
             switch (context.provider) {
               case StorageProviderType.JSONBIN: {
                 break;
@@ -245,6 +260,16 @@ export default function useRemoteTokens() {
               }
               case StorageProviderType.TOKENS_STUDIO: {
                 dispatch.tokenState.setTokenSetMetadata(remoteData.metadata?.tokenSetsData ?? {});
+                break;
+              }
+              case StorageProviderType.TOKENS_STUDIO_OAUTH: {
+                dispatch.tokenState.setTokenSetMetadata(remoteData.metadata?.tokenSetsData ?? {});
+                if (remoteData.metadata?.changeSetId) {
+                  dispatch.uiState.setApiData({
+                    ...context,
+                    changeSetId: remoteData.metadata.changeSetId,
+                  });
+                }
                 break;
               }
               default:
@@ -307,6 +332,8 @@ export default function useRemoteTokens() {
       tokens,
       themes,
       activeTab,
+      currentActiveTheme,
+      currentUsedTokenSet,
       dispatch,
       api,
       pullTokensFromGenericVersionedStorage,
@@ -321,6 +348,7 @@ export default function useRemoteTokens() {
       closePullDialog,
       pullTokensFromSupernova,
       pullTokensFromTokensStudio,
+      pullTokensFromTokensStudioOAuth,
     ],
   );
 
@@ -358,6 +386,11 @@ export default function useRemoteTokens() {
           dispatch.tokenState.setTokenFormat(TokenFormatOptions.DTCG);
           break;
         }
+        case StorageProviderType.TOKENS_STUDIO_OAUTH: {
+          content = await syncTokensWithTokensStudioOAuth(context as any);
+          dispatch.tokenState.setTokenFormat(TokenFormatOptions.DTCG);
+          break;
+        }
         default:
           content = await pullTokens({ context });
       }
@@ -387,6 +420,7 @@ export default function useRemoteTokens() {
       syncTokensWithADO,
       syncTokensWithSupernova,
       syncTokensWithTokensStudio,
+      syncTokensWithTokensStudioOAuth,
     ],
   );
 
@@ -417,6 +451,10 @@ export default function useRemoteTokens() {
         }
         case StorageProviderType.TOKENS_STUDIO: {
           pushResult = await pushTokensToTokensStudio(context);
+          break;
+        }
+        case StorageProviderType.TOKENS_STUDIO_OAUTH: {
+          pushResult = await pushTokensToTokensStudioOAuth(context as any);
           break;
         }
         default:
@@ -454,6 +492,7 @@ export default function useRemoteTokens() {
       pushTokensToADO,
       pushTokensToSupernova,
       pushTokensToTokensStudio,
+      pushTokensToTokensStudioOAuth,
       tokens,
       themes,
     ],
@@ -523,6 +562,10 @@ export default function useRemoteTokens() {
           content = await addNewTokensStudioCredentials(credentials);
           break;
         }
+        case StorageProviderType.TOKENS_STUDIO_OAUTH: {
+          content = await syncTokensWithTokensStudioOAuth(credentials as any);
+          break;
+        }
         default:
           throw new Error('Not implemented');
       }
@@ -555,6 +598,7 @@ export default function useRemoteTokens() {
       addNewADOCredentials,
       addNewSupernovaCredentials,
       addNewTokensStudioCredentials,
+      syncTokensWithTokensStudioOAuth,
       createNewJSONBin,
       createNewGenericVersionedStorage,
       pullTokensFromURL,
@@ -601,6 +645,8 @@ export default function useRemoteTokens() {
           return fetchBitbucketBranches(context);
         case StorageProviderType.ADO:
           return fetchADOBranches(context);
+        case StorageProviderType.TOKENS_STUDIO_OAUTH:
+          return fetchBranchesForTokensStudio(context as any);
         default:
           return null;
       }
@@ -699,9 +745,38 @@ export default function useRemoteTokens() {
     [api, checkRemoteChangeForGitHub, checkRemoteChangeForGitLab, dispatch.uiState],
   );
 
+  const restoreProviderWithAutoPull = useCallback(
+    async (context: StorageTypeCredentials) => {
+      track('restoreProviderWithAutoPull', { provider: context.provider });
+      dispatch.uiState.setLocalApiState(context);
+      dispatch.uiState.setApiData(context);
+      dispatch.tokenState.setEditProhibited(false);
+      setStorageType({ provider: context, shouldSetInDocument: true });
+
+      // Pull tokens automatically without user confirmation
+      await pullTokens({
+        context,
+        updateLocalTokens: true,
+        usedTokenSet: {},
+        activeTheme: {},
+        collapsedTokenSets: [],
+        skipConfirmation: true,
+      });
+
+      // Switch to tokens tab after successful load
+      dispatch.uiState.setActiveTab(Tabs.TOKENS);
+
+      return {
+        status: 'success',
+      };
+    },
+    [dispatch, setStorageType, pullTokens],
+  );
+
   return useMemo(
     () => ({
       restoreStoredProvider,
+      restoreProviderWithAutoPull,
       deleteProvider,
       pullTokens,
       pushTokens,
@@ -713,6 +788,7 @@ export default function useRemoteTokens() {
     }),
     [
       restoreStoredProvider,
+      restoreProviderWithAutoPull,
       deleteProvider,
       pullTokens,
       pushTokens,

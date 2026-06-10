@@ -32,6 +32,7 @@ export async function updateUISettings(uiSettings: Partial<SavedSettings>) {
       stylesColor: uiSettings.stylesColor ?? data?.stylesColor,
       stylesEffect: uiSettings.stylesEffect ?? data?.stylesEffect,
       stylesTypography: uiSettings.stylesTypography ?? data?.stylesTypography,
+      stylesGradient: uiSettings.stylesGradient ?? data?.stylesGradient,
       inspectDeep: uiSettings.inspectDeep ?? data?.inspectDeep,
       shouldSwapStyles: uiSettings.shouldSwapStyles ?? data?.shouldSwapStyles,
       shouldSwapFigmaModes: uiSettings.shouldSwapFigmaModes ?? data?.shouldSwapFigmaModes,
@@ -68,6 +69,7 @@ export async function getUISettings(notify = true): Promise<SavedSettings> {
     let stylesColor: boolean;
     let stylesEffect: boolean;
     let stylesTypography: boolean;
+    let stylesGradient: boolean;
     let ignoreFirstPartForStyles: boolean;
     let createStylesWithVariableReferences: boolean;
     let prefixStylesWithThemeName: boolean;
@@ -103,6 +105,7 @@ export async function getUISettings(notify = true): Promise<SavedSettings> {
       stylesColor = typeof data.stylesColor === 'undefined' ? false : data.stylesColor;
       stylesTypography = typeof data.stylesTypography === 'undefined' ? true : data.stylesTypography;
       stylesEffect = typeof data.stylesEffect === 'undefined' ? true : data.stylesEffect;
+      stylesGradient = typeof data.stylesGradient === 'undefined' ? false : data.stylesGradient;
       ignoreFirstPartForStyles = typeof data.ignoreFirstPartForStyles === 'undefined' ? false : data.ignoreFirstPartForStyles;
       createStylesWithVariableReferences = typeof data.createStylesWithVariableReferences === 'undefined' ? true : data.createStylesWithVariableReferences;
       prefixStylesWithThemeName = typeof data.prefixStylesWithThemeName === 'undefined' ? false : data.prefixStylesWithThemeName;
@@ -115,7 +118,7 @@ export async function getUISettings(notify = true): Promise<SavedSettings> {
       shouldSwapFigmaModes = typeof data.shouldSwapFigmaModes === 'undefined' ? false : data.shouldSwapFigmaModes;
       sessionRecording = typeof data.sessionRecording === 'undefined' ? false : data.sessionRecording;
       storeTokenIdInJsonEditor = typeof data.storeTokenIdInJsonEditor === 'undefined' ? false : data.storeTokenIdInJsonEditor;
-      tokenFormat = data.tokenFormat || TokenFormatOptions.Legacy;
+      tokenFormat = data.tokenFormat || TokenFormatOptions.DTCG;
       autoApplyThemeOnDrop = typeof data.autoApplyThemeOnDrop === 'undefined' ? false : data.autoApplyThemeOnDrop;
       seenGenericVersionedHeaderMigrationDialog = typeof data.seenGenericVersionedHeaderMigrationDialog === 'undefined' ? false : data.seenGenericVersionedHeaderMigrationDialog;
       seenTermsUpdate2026 = typeof data.seenTermsUpdate2026 === 'undefined' ? false : data.seenTermsUpdate2026;
@@ -137,6 +140,7 @@ export async function getUISettings(notify = true): Promise<SavedSettings> {
         stylesColor,
         stylesEffect,
         stylesTypography,
+        stylesGradient,
         ignoreFirstPartForStyles,
         createStylesWithVariableReferences,
         prefixStylesWithThemeName,

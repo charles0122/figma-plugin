@@ -1,5 +1,93 @@
 # @tokens-studio/figma-plugin
 
+## 2.11.8
+
+### Patch Changes
+
+- 2f90c0b0f: Fixed an issue where duplicate Tokens Studio OAuth providers were created and persisted in the storage when switching branches, causing visual and functional duplication in the Sync Settings.
+- 8d3ea2f82: Fixed an issue where tokens using complex modifiers (such as `set_alpha`) were incorrectly exported as white or caused errors in Figma variables. This update ensures that the accurately resolved values visible in the Studio UI are correctly preserved during the export process for Tokens Studio OAuth users.
+
+## 2.11.7
+
+### Patch Changes
+
+- 6b939f9c4: Introduced server-side token resolution for Tokens Studio OAuth projects, leveraging our gRPC-backed engine to provide more accurate, theme-aware token values directly within the plugin.
+
+## 2.11.6
+
+### Patch Changes
+
+- 87ff6386c: Fixed an issue where tokens imported from Tokens Studio were incorrectly recognized as custom tokens due to type name mismatches (e.g., 'space' vs 'spacing', 'size' vs 'sizing').
+- 38e5b4e4a: Fixed an issue where token set folder structure was lost when pulling tokens from new Studio OAuth.
+
+## 2.11.5
+
+### Patch Changes
+
+- e0ad95d87: Add ability to pull Variable Scopes and Code Syntaxes from New Studio, when pulling tokens.
+- 1d5c60fde: Support per-mode `baseFontSize` resolution via aliases, ensuring correct rem-to-pixel scaling when exporting variables across different themes. Also includes improved handling of numeric/aliased font sizes in variable exports and more robust testing for dimension conversions.
+- b0e1563de: Fix tracking and mapping of radial gradient tokens to properly apply radial transformations in Figma
+
+## 2.11.4
+
+### Patch Changes
+
+- 897f1dc37: Add ability to filter token sets(enabled/disabled/reference) when editing a theme
+- 2a9d75970: Add ability to fetch tokens, sets and themes from the new Tokens Studio platform.
+
+## 2.11.3
+
+### Patch Changes
+
+- aa7554eed: Fixed a bug with Studio sync's access rights
+- 8a546f260: Add SlotNode support so theme propagation and token persistence work correctly on Figma Slots
+
+## 2.11.2
+
+### Patch Changes
+
+- 0d48bf518: - Added the Subscription tab, enabling users to log into their Tokens Studio account
+  - Users will automatically receive Pro access in the plugin based on the plan associated with their Studio account.
+
+## 2.11.1
+
+### Patch Changes
+
+- bbad7157d: Fix gap token deselection when left-clicking. Previously, left-clicking a gap token to deselect it would incorrectly attempt to remove the first property instead of the property that actually has the token applied. This caused the gap value to disappear from Figma's side panel while the token remained active in the inspect panel. The fix ensures that the correct property is toggled when deselecting tokens.
+- c3f4d248b: Variable scoping enhancements -
+
+  - Add support for hiddenFromPublishing
+  - Add support for selecting no scopes in a token
+  - Fix font weight token scoping bug when weight is set to a string
+
+- 9f504f99e: Fix bug where deselecting padding tokens via "All" option incorrectly removes gap from Figma side panel
+- 4ca80838e: Fix tooltip display when token resolved value is 0
+
+## 2.11.0
+
+### Minor Changes
+
+- ce30e3776: Add Support for Figma Variable Scopes and Code Syntaxes
+
+  - Added support for Figma Variable Scopes and Code Syntax (Android, iOS, Web).
+  - Enabled seamless export and import of variable metadata across themes.
+
+### Patch Changes
+
+- 2307b3ba0: Add gradient export as styles option - users can now export color tokens with linear-gradient values as Figma styles by enabling the "Gradients" checkbox in the Styles section of the export options.
+- f25568be0: Increase Bitbucket branches API request to 100 so that more number of branches fit in the list of branches.
+- 666ca15e7: Fix token changes bleeding between branches when creating new branch from different source or switching branches
+- 0809774db: Fix Exporting of Gradient Tokens as styles when trailing spaces exist
+- d8b120e3d: Add provider selector to StartScreen with automatic token pulling and theme selection
+
+  - Added Select dropdown to StartScreen showing saved sync providers when available
+  - Providers can be selected directly from the start screen without navigating to Settings
+  - Selected providers automatically pull tokens without confirmation dialogs
+  - Auto-selects first theme from each theme group when no prior theme selections exist
+  - Maintains backward compatibility with existing error handling and retry mechanisms
+
+- f9a3f61de: Set default format of the plugin to DTCG
+
 ## 2.10.9
 
 ### Patch Changes

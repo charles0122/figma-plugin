@@ -10,6 +10,8 @@ import { StorageProviderType } from '@/constants/StorageProviderType';
 export type RemoteTokenStorageMetadata = {
   tokenSetOrder?: string[];
   tokenSetsData?: Record<string, { isDynamic?: boolean }>;
+  themeGroupsData?: Record<string, { id: string }>;
+  changeSetId?: string;
 };
 
 export type RemoteTokenStorageData<Metadata> = {
@@ -133,7 +135,7 @@ export abstract class RemoteTokenStorage<
         } else if (file.type === 'tokenSet') {
           data.tokens = {
             ...data.tokens,
-            ...parseTokenValues({ [file.name]: file.data }),
+            ...parseTokenValues({ [file.name]: file.data }, true),
           };
         } else if (file.type === 'metadata') {
           data.metadata = {

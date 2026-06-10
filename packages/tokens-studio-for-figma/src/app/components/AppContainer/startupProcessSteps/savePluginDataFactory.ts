@@ -1,6 +1,8 @@
 import type { Dispatch } from '@/app/store';
+import { isTokensStudioOAuthType } from '@/utils/is';
 import type { StartupMessage } from '@/types/AsyncMessages';
 import { identify, track } from '@/utils/analytics';
+import { useAuthStore } from '@/app/store/useAuthStore';
 import pjs from '../../../../../package.json';
 
 export function savePluginDataFactory(dispatch: Dispatch, params: StartupMessage) {
@@ -38,6 +40,16 @@ export function savePluginDataFactory(dispatch: Dispatch, params: StartupMessage
       // Store the selected export themes in the UI state
       if (params.selectedExportThemes) {
         dispatch.uiState.setSelectedExportThemes(params.selectedExportThemes);
+      }
+
+      // Restore OAuth tokens
+      if (params.oauthTokens) {
+        if (params.activeOrganizationId) {
+          useAuthStore.setState({ activeOrganizationId: params.activeOrganizationId });
+        }
+        useAuthStore.getState().setOAuthTokens(params.oauthTokens);
+        const activeProjectId = params.storageType && isTokensStudioOAuthType(params.storageType) ? params.storageType.id : undefined;
+        useAuthStore.getState().fetchUserData(params.oauthTokens, activeProjectId);
       }
     } else {
       throw new Error('User not found');

@@ -18,13 +18,13 @@ function isFigmaColorObject(obj: VariableValue): obj is RGBOrRGBA {
   );
 }
 
-export default function setColorValuesOnVariable(variable: Variable, mode: string, value: string) {
+export default function setColorValuesOnVariable(variable: Variable, mode: string, value: string, forceUpdate = false) {
   try {
     const { color, opacity } = convertToFigmaColor(value);
     const existingVariableValue = variable.valuesByMode[mode];
     if (
-      !existingVariableValue
-      || !(isFigmaColorObject(existingVariableValue) || isVariableWithAliasReference(existingVariableValue))
+      existingVariableValue
+      && !(isFigmaColorObject(existingVariableValue) || isVariableWithAliasReference(existingVariableValue))
     ) return;
 
     const newValue = { ...color, a: opacity };
@@ -36,8 +36,8 @@ export default function setColorValuesOnVariable(variable: Variable, mode: strin
         a: 'a' in existingVariableValue ? existingVariableValue.a : 1,
       };
 
-      if (isColorApproximatelyEqual(existingValue, newValue)) {
-        // return if values are approximately equal
+      if (!forceUpdate && isColorApproximatelyEqual(existingValue, newValue)) {
+        // return if values are approximately equal and not forcing update
         return;
       }
     }

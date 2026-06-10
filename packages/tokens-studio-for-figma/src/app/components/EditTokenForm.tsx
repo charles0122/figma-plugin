@@ -45,6 +45,7 @@ import { tokenTypesToCreateVariable } from '@/constants/VariableTypes';
 import { ModalOptions } from '@/constants/ModalOptions';
 import { TokenReferencesList } from './TokenReferencesList';
 import { useTokenReferences } from '@/app/hooks/useTokenReferences';
+import FigmaVariableForm from './FigmaVariableForm';
 
 let lastUsedRenameOption: UpdateMode = UpdateMode.SELECTION;
 let lastUsedRenameStyles = false;
@@ -345,6 +346,50 @@ function EditTokenForm({ resolvedTokens }: Props) {
             modify: newModify,
           },
         } as SingleToken['$extensions'],
+      });
+    },
+    [internalEditToken],
+  );
+
+  const removeFigmaVariable = React.useCallback(() => {
+    const newExtensions = { ...internalEditToken.$extensions };
+    delete newExtensions['com.figma.scopes'];
+    delete newExtensions['com.figma.codeSyntax'];
+    delete newExtensions['com.figma.hiddenFromPublishing'];
+    // Keep variableId and isOverride if they exist
+    setInternalEditToken({
+      ...internalEditToken,
+      $extensions: newExtensions as SingleToken['$extensions'],
+    });
+  }, [internalEditToken]);
+
+  const handleFigmaVariableChange = React.useCallback(
+    (scopes: string[], codeSyntax: Partial<Record<string, string>>, hiddenFromPublishing?: boolean) => {
+      const newExtensions = { ...internalEditToken.$extensions };
+
+      // Set or remove scopes in flat format
+      if (scopes.length > 0) {
+        newExtensions['com.figma.scopes'] = scopes;
+      } else {
+        delete newExtensions['com.figma.scopes'];
+      }
+
+      // Set or remove codeSyntax in flat format
+      if (Object.keys(codeSyntax).length > 0) {
+        newExtensions['com.figma.codeSyntax'] = codeSyntax;
+      } else {
+        delete newExtensions['com.figma.codeSyntax'];
+      }
+
+      if (typeof hiddenFromPublishing === 'boolean') {
+        newExtensions['com.figma.hiddenFromPublishing'] = hiddenFromPublishing;
+      } else {
+        delete newExtensions['com.figma.hiddenFromPublishing'];
+      }
+
+      setInternalEditToken({
+        ...internalEditToken,
+        $extensions: newExtensions as SingleToken['$extensions'],
       });
     },
     [internalEditToken],
@@ -755,6 +800,11 @@ function EditTokenForm({ resolvedTokens }: Props) {
             />
           )}
         </Box>
+        <FigmaVariableForm
+          internalEditToken={internalEditToken}
+          handleFigmaVariableChange={handleFigmaVariableChange}
+          handleRemoveFigmaVariable={removeFigmaVariable}
+        />
         {internalEditToken.status === EditTokenFormStatus.EDIT && references.length > 0 && (
           <TokenReferencesList references={references} />
         )}

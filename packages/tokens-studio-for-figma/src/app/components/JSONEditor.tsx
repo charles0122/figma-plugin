@@ -20,7 +20,7 @@ function JSONEditor({
   const editProhibited = useSelector(editProhibitedSelector);
   const activeTokenSetReadOnly = useSelector(activeTokenSetReadOnlySelector);
   const activeApiProvider = useSelector(activeApiProviderSelector);
-  const isTokensStudioProvider = activeApiProvider === StorageProviderType.TOKENS_STUDIO;
+  const isTokensStudioProvider = activeApiProvider === StorageProviderType.TOKENS_STUDIO || activeApiProvider === StorageProviderType.TOKENS_STUDIO_OAUTH;
 
   const { handleJSONUpdate } = useTokens();
   const { isDarkTheme } = useFigmaTheme();
@@ -38,11 +38,13 @@ function JSONEditor({
     handleChange(value ?? '');
   }, [handleChange]);
 
+  const isReadOnly = editProhibited || activeTokenSetReadOnly || isTokensStudioProvider;
+
   const handleSaveShortcut = React.useCallback((event: KeyboardEvent) => {
-    if (event.metaKey || event.ctrlKey) {
+    if (!isReadOnly && (event.metaKey || event.ctrlKey)) {
       handleJSONUpdate(stringTokens);
     }
-  }, [handleJSONUpdate, stringTokens]);
+  }, [handleJSONUpdate, stringTokens, isReadOnly]);
 
   useShortcut(['KeyS'], handleSaveShortcut);
 
@@ -69,7 +71,7 @@ function JSONEditor({
           fontSize: 11,
           wordWrap: 'on',
           contextmenu: false,
-          readOnly: editProhibited || activeTokenSetReadOnly || isTokensStudioProvider,
+          readOnly: isReadOnly,
         }}
       />
     </Box>

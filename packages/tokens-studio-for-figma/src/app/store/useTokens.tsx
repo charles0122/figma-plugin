@@ -3,7 +3,9 @@ import { useCallback, useMemo, useContext } from 'react';
 import { AnyTokenList, SingleToken, TokenToRename } from '@/types/tokens';
 import stringifyTokens from '@/utils/stringifyTokens';
 import formatTokens from '@/utils/formatTokens';
-import { getEnabledTokenSets, getOverallConfig, mergeTokenGroups } from '@/utils/tokenHelpers';
+import {
+  getEnabledTokenSets, getOverallConfig, mergeTokenGroups, mergeServerResolvedTokens,
+} from '@/utils/tokenHelpers';
 import useConfirm from '../hooks/useConfirm';
 import { Properties } from '@/constants/Properties';
 import { track } from '@/utils/analytics';
@@ -17,7 +19,9 @@ import {
   uiStateSelector,
   updateModeSelector,
   themesListSelector,
+  storageTypeSelector,
 } from '@/selectors';
+import { StorageProviderType } from '@/constants/StorageProviderType';
 import { TokenSetStatus } from '@/constants/TokenSetStatus';
 import { TokenTypes } from '@/constants/TokenTypes';
 import { isEqual } from '@/utils/isEqual';
@@ -62,6 +66,7 @@ export default function useTokens() {
   const updateMode = useSelector(updateModeSelector);
   const tokens = useSelector(tokensSelector);
   const themes = useSelector(themesListSelector);
+  const storageType = useSelector(storageTypeSelector);
   const settings = useSelector(settingsStateSelector, isEqual);
   const storeTokenIdInJsonEditor = useSelector(storeTokenIdInJsonEditorSelector);
   const { confirm } = useConfirm<ConfirmResult>();
@@ -76,6 +81,14 @@ export default function useTokens() {
     TokenTypes.SPACING,
   ];
   const tokenFormat = getFormat();
+
+  // Helper function to detect if a token value is a gradient
+  const isGradientValue = useCallback((value: any): boolean => {
+    if (typeof value !== 'string') return false;
+    return value.startsWith('linear-gradient')
+      || value.startsWith('radial-gradient')
+      || value.startsWith('conic-gradient');
+  }, []);
 
   // Gets value of token
   const getTokenValue = useCallback(
@@ -342,10 +355,12 @@ export default function useTokens() {
     [activeTokenSet, tokens, confirm, handleBulkRemap, dispatch.tokenState, settings],
   );
 
+  const serverResolvedTokens = useSelector((state: RootState) => state.tokenState.serverResolvedTokens);
+
   // Asks user which styles to create, then calls Figma with all tokens to create styles
   const createStylesFromSelectedTokenSets = useCallback(
     async (selectedSets: ExportTokenSet[]) => {
-      const shouldCreateStyles = (settings.stylesTypography || settings.stylesColor || settings.stylesEffect) && selectedSets.length > 0;
+      const shouldCreateStyles = (settings.stylesTypography || settings.stylesColor || settings.stylesGradient || settings.stylesEffect) && selectedSets.length > 0;
       if (!shouldCreateStyles) return;
 
       dispatch.uiState.startJob({
@@ -369,15 +384,21 @@ export default function useTokens() {
 
       const tokensToResolve = mergeTokenGroups(tokens, selectedSetsMap);
 
-      const resolved = defaultTokenResolver.setTokens(tokensToResolve);
+      const resolved = mergeServerResolvedTokens(
+        defaultTokenResolver.setTokens(tokensToResolve),
+        serverResolvedTokens,
+      );
       const withoutSourceTokens = resolved.filter(
         (token) => !token.internal__Parent || enabledTokenSets.includes(token.internal__Parent), // filter out SOURCE tokens
       );
 
       const tokensToCreate = withoutSourceTokens.reduce((acc: SingleToken[], curr) => {
+        const isGradient = curr.type === TokenTypes.COLOR && isGradientValue(curr.value);
+
         const shouldCreate = [
           settings.stylesTypography && curr.type === TokenTypes.TYPOGRAPHY,
-          settings.stylesColor && curr.type === TokenTypes.COLOR,
+          settings.stylesColor && curr.type === TokenTypes.COLOR && !isGradient,
+          settings.stylesGradient && isGradient,
           settings.stylesEffect && curr.type === TokenTypes.BOX_SHADOW,
         ].some((isEnabled) => isEnabled);
         if (shouldCreate) {
@@ -409,12 +430,12 @@ export default function useTokens() {
 
       dispatch.uiState.completeJob(BackgroundJobs.UI_CREATE_STYLES);
     },
-    [tokens, settings, dispatch.uiState],
+    [tokens, settings, dispatch.uiState, serverResolvedTokens],
   );
 
   const createStylesFromSelectedThemes = useCallback(
     async (selectedThemes: string[]) => {
-      const shouldCreateStyles = (settings.stylesTypography || settings.stylesColor || settings.stylesEffect) && selectedThemes.length > 0;
+      const shouldCreateStyles = (settings.stylesTypography || settings.stylesColor || settings.stylesGradient || settings.stylesEffect) && selectedThemes.length > 0;
       if (!shouldCreateStyles) return;
 
       dispatch.uiState.startJob({
@@ -448,16 +469,22 @@ export default function useTokens() {
 
           if (enabledTokenSets.length > 0) {
             const tokensToResolve = mergeTokenGroups(tokens, selectedSets, overallConfig);
-            const allTokens = defaultTokenResolver.setTokens(tokensToResolve);
+            const allTokens = mergeServerResolvedTokens(
+              defaultTokenResolver.setTokens(tokensToResolve),
+              serverResolvedTokens,
+            );
 
             const tokensFromEnabledSets = allTokens.filter(
               (token) => !token.internal__Parent || enabledTokenSets.includes(token.internal__Parent), // only use enabled sets
             );
 
             const tokensToCreate = tokensFromEnabledSets.reduce((acc: SingleToken[], curr) => {
+              const isGradient = curr.type === TokenTypes.COLOR && isGradientValue(curr.value);
+
               const shouldCreate = [
                 settings.stylesTypography && curr.type === TokenTypes.TYPOGRAPHY,
-                settings.stylesColor && curr.type === TokenTypes.COLOR,
+                settings.stylesColor && curr.type === TokenTypes.COLOR && !isGradient,
+                settings.stylesGradient && isGradient,
                 settings.stylesEffect && curr.type === TokenTypes.BOX_SHADOW,
               ].some((isEnabled) => isEnabled);
               if (shouldCreate && !acc.find((token) => curr.name === token.name)) {
@@ -516,7 +543,7 @@ export default function useTokens() {
 
       dispatch.uiState.completeJob(BackgroundJobs.UI_CREATE_STYLES);
     },
-    [dispatch.tokenState, tokens, settings, themes, dispatch.uiState],
+    [dispatch.tokenState, tokens, settings, themes, dispatch.uiState, serverResolvedTokens],
   );
 
   const renameStylesFromTokens = useCallback(
@@ -616,18 +643,19 @@ export default function useTokens() {
         type: AsyncMessageTypes.CREATE_LOCAL_VARIABLES,
         tokens: multiValueFilteredTokens,
         settings,
+        serverResolvedTokens: storageType.provider === StorageProviderType.TOKENS_STUDIO_OAUTH ? serverResolvedTokens : null,
       }),
     );
     dispatch.tokenState.assignVariableIdsToTheme(createVariableResult.variableIds);
     dispatch.uiState.completeJob(BackgroundJobs.UI_CREATEVARIABLES);
-  }, [dispatch.tokenState, dispatch.uiState, tokens, settings]);
+  }, [dispatch.tokenState, dispatch.uiState, tokens, settings, serverResolvedTokens, storageType]);
 
   const createVariablesFromSets = useCallback(
     async (selectedSets: ExportTokenSet[]) => {
       const shouldCreateVariables = (settings.variablesBoolean
-          || settings.variablesColor
-          || settings.variablesNumber
-          || settings.variablesString)
+        || settings.variablesColor
+        || settings.variablesNumber
+        || settings.variablesString)
         && selectedSets.length > 0;
       if (!shouldCreateVariables) return;
 
@@ -661,20 +689,21 @@ export default function useTokens() {
           tokens,
           settings,
           selectedSets,
+          serverResolvedTokens: storageType.provider === StorageProviderType.TOKENS_STUDIO_OAUTH ? serverResolvedTokens : null,
         }),
       );
       dispatch.uiState.completeJob(BackgroundJobs.UI_CREATEVARIABLES);
       Promise.resolve();
     },
-    [dispatch.uiState, tokens, settings],
+    [dispatch.uiState, tokens, settings, serverResolvedTokens, storageType],
   );
 
   const createVariablesFromThemes = useCallback(
     async (selectedThemes: string[]) => {
       const shouldCreateVariables = (settings.variablesBoolean
-          || settings.variablesColor
-          || settings.variablesNumber
-          || settings.variablesString)
+        || settings.variablesColor
+        || settings.variablesNumber
+        || settings.variablesString)
         && selectedThemes.length > 0;
       if (!shouldCreateVariables) return;
 
@@ -708,13 +737,14 @@ export default function useTokens() {
           tokens,
           settings,
           selectedThemes,
+          serverResolvedTokens: storageType.provider === StorageProviderType.TOKENS_STUDIO_OAUTH ? serverResolvedTokens : null,
         }),
       );
       dispatch.tokenState.assignVariableIdsToTheme(createVariableResult.variableIds);
       dispatch.uiState.completeJob(BackgroundJobs.UI_CREATEVARIABLES);
       Promise.resolve();
     },
-    [dispatch.tokenState, dispatch.uiState, tokens, settings],
+    [dispatch.tokenState, dispatch.uiState, tokens, settings, serverResolvedTokens, storageType],
   );
 
   const renameVariablesFromToken = useCallback(
