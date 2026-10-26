@@ -20,7 +20,10 @@ import {
   updateModeSelector,
   themesListSelector,
   storageTypeSelector,
+  isTokensStudioSyncSelector,
 } from '@/selectors';
+import { useAuthStore } from '@/app/store/useAuthStore';
+import { fetchServerResolvedTokensPerTheme } from '@/utils/tokensStudio/fetchServerResolvedTokensPerTheme';
 import { StorageProviderType } from '@/constants/StorageProviderType';
 import { TokenSetStatus } from '@/constants/TokenSetStatus';
 import { TokenTypes } from '@/constants/TokenTypes';
@@ -67,7 +70,16 @@ export default function useTokens() {
   const tokens = useSelector(tokensSelector);
   const themes = useSelector(themesListSelector);
   const storageType = useSelector(storageTypeSelector);
-  const settings = useSelector(settingsStateSelector, isEqual);
+  const rawSettings = useSelector(settingsStateSelector, isEqual);
+  const isTokensStudioSync = useSelector(isTokensStudioSyncSelector);
+  // Tokens Studio sync doesn't support extended collections, so the persisted
+  // setting is overridden while Studio is active. Other providers get it as-is.
+  const settings = useMemo(
+    () => (isTokensStudioSync && rawSettings.exportExtendedCollections
+      ? { ...rawSettings, exportExtendedCollections: false }
+      : rawSettings),
+    [rawSettings, isTokensStudioSync],
+  );
   const storeTokenIdInJsonEditor = useSelector(storeTokenIdInJsonEditorSelector);
   const { confirm } = useConfirm<ConfirmResult>();
   const store = useStore<RootState>();
@@ -145,8 +157,10 @@ export default function useTokens() {
     (newTokens: string) => {
       track('Update JSON');
       dispatch.tokenState.setJSONData(newTokens);
+      // @ts-ignore
+      dispatch.tokenState.updateDocument({ shouldUpdateNodes: settings.updateOnChange });
     },
-    [dispatch.tokenState],
+    [dispatch.tokenState, settings.updateOnChange],
   );
 
   // Handles the update operation
@@ -356,6 +370,7 @@ export default function useTokens() {
   );
 
   const serverResolvedTokens = useSelector((state: RootState) => state.tokenState.serverResolvedTokens);
+  const serverResolverContext = useSelector((state: RootState) => state.tokenState.serverResolverContext);
 
   // Asks user which styles to create, then calls Figma with all tokens to create styles
   const createStylesFromSelectedTokenSets = useCallback(
@@ -393,7 +408,7 @@ export default function useTokens() {
       );
 
       const tokensToCreate = withoutSourceTokens.reduce((acc: SingleToken[], curr) => {
-        const isGradient = curr.type === TokenTypes.COLOR && isGradientValue(curr.value);
+        const isGradient = curr.type === TokenTypes.GRADIENT || (curr.type === TokenTypes.COLOR && isGradientValue(curr.value));
 
         const shouldCreate = [
           settings.stylesTypography && curr.type === TokenTypes.TYPOGRAPHY,
@@ -479,7 +494,7 @@ export default function useTokens() {
             );
 
             const tokensToCreate = tokensFromEnabledSets.reduce((acc: SingleToken[], curr) => {
-              const isGradient = curr.type === TokenTypes.COLOR && isGradientValue(curr.value);
+              const isGradient = curr.type === TokenTypes.GRADIENT || (curr.type === TokenTypes.COLOR && isGradientValue(curr.value));
 
               const shouldCreate = [
                 settings.stylesTypography && curr.type === TokenTypes.TYPOGRAPHY,
@@ -643,19 +658,22 @@ export default function useTokens() {
         type: AsyncMessageTypes.CREATE_LOCAL_VARIABLES,
         tokens: multiValueFilteredTokens,
         settings,
-        serverResolvedTokens: storageType.provider === StorageProviderType.TOKENS_STUDIO_OAUTH ? serverResolvedTokens : null,
+        // No selectedThemes here → the plugin no-ops, so a per-theme delta is
+        // unnecessary and we skip the server round-trip.
+        serverResolvedTokens: null,
       }),
     );
     dispatch.tokenState.assignVariableIdsToTheme(createVariableResult.variableIds);
     dispatch.uiState.completeJob(BackgroundJobs.UI_CREATEVARIABLES);
-  }, [dispatch.tokenState, dispatch.uiState, tokens, settings, serverResolvedTokens, storageType]);
+  }, [dispatch.tokenState, dispatch.uiState, tokens, settings]);
 
   const createVariablesFromSets = useCallback(
     async (selectedSets: ExportTokenSet[]) => {
       const shouldCreateVariables = (settings.variablesBoolean
         || settings.variablesColor
         || settings.variablesNumber
-        || settings.variablesString)
+        || settings.variablesString
+        || settings.variablesMotion)
         && selectedSets.length > 0;
       if (!shouldCreateVariables) return;
 
@@ -689,13 +707,18 @@ export default function useTokens() {
           tokens,
           settings,
           selectedSets,
-          serverResolvedTokens: storageType.provider === StorageProviderType.TOKENS_STUDIO_OAUTH ? serverResolvedTokens : null,
+          // No theme dimension here — each set becomes its own single-mode
+          // collection. The Redux server-resolved delta is scoped to the
+          // currently active theme, so applying it here would leak active-
+          // theme values into unrelated sets. Local resolution is the source
+          // of truth for per-set exports.
+          serverResolvedTokens: null,
         }),
       );
       dispatch.uiState.completeJob(BackgroundJobs.UI_CREATEVARIABLES);
       Promise.resolve();
     },
-    [dispatch.uiState, tokens, settings, serverResolvedTokens, storageType],
+    [dispatch.uiState, tokens, settings],
   );
 
   const createVariablesFromThemes = useCallback(
@@ -703,7 +726,8 @@ export default function useTokens() {
       const shouldCreateVariables = (settings.variablesBoolean
         || settings.variablesColor
         || settings.variablesNumber
-        || settings.variablesString)
+        || settings.variablesString
+        || settings.variablesMotion)
         && selectedThemes.length > 0;
       if (!shouldCreateVariables) return;
 
@@ -711,40 +735,84 @@ export default function useTokens() {
         name: BackgroundJobs.UI_CREATEVARIABLES,
         isInfinite: true,
       });
-      const createVariableResult = await wrapTransaction(
-        {
-          name: 'createVariables',
-          statExtractor: async (result, transaction) => {
-            const data = await result;
-            if (data) {
-              track('createVariables', {
-                type: 'themes',
-                totalVariables: data.totalVariables,
-                themeCount: selectedThemes.length,
-                variablesColor: settings.variablesColor,
-                variablesNumber: settings.variablesNumber,
-                variablesString: settings.variablesString,
-                variablesBoolean: settings.variablesBoolean,
-                removeStylesAndVariablesWithoutConnection: settings.removeStylesAndVariablesWithoutConnection,
-                renameExistingStylesAndVariables: settings.renameExistingStylesAndVariables,
-              });
-              transaction.setMeasurement('variables', data.totalVariables, '');
+
+      try {
+        // For Tokens Studio OAuth projects, fetch the server-resolved delta
+        // ONCE PER SELECTED THEME so each mode gets the correct values. The
+        // Redux `serverResolvedTokens` is a single flat map built for the
+        // currently active theme — using it for every mode clobbers each mode
+        // with the active theme's values.
+        //
+        // Snapshot the resolver context up front so an in-flight project
+        // switch can't cause us to dispatch A's deltas against B's Redux.
+        const snapshotContext = serverResolverContext;
+        let perThemeServerResolvedTokens: Record<string, Record<string, string>> | null = null;
+        if (storageType.provider === StorageProviderType.TOKENS_STUDIO_OAUTH && snapshotContext) {
+          const { oauthTokens } = useAuthStore.getState();
+          if (oauthTokens?.accessToken) {
+            const selectedThemeObjects = themes.filter((t) => selectedThemes.includes(t.id));
+            perThemeServerResolvedTokens = await fetchServerResolvedTokensPerTheme(
+              selectedThemeObjects,
+              {
+                apiBaseUrl: snapshotContext.apiBaseUrl,
+                projectId: snapshotContext.projectId,
+                changeSetId: snapshotContext.changeSetId,
+                authToken: oauthTokens.accessToken,
+              },
+            );
+            // Bail out of the write if the user switched project/change-set
+            // mid-fetch — our snapshot no longer describes current state. Read
+            // the LIVE context from the store (not the closure-captured
+            // `serverResolverContext`, which is frozen to the snapshot value
+            // and can never detect an in-flight switch).
+            const liveContext = store.getState().tokenState.serverResolverContext;
+            if (
+              liveContext?.projectId !== snapshotContext.projectId
+              || liveContext?.changeSetId !== snapshotContext.changeSetId
+              || liveContext?.apiBaseUrl !== snapshotContext.apiBaseUrl
+            ) {
+              return;
             }
+          }
+        }
+
+        const createVariableResult = await wrapTransaction(
+          {
+            name: 'createVariables',
+            statExtractor: async (result, transaction) => {
+              const data = await result;
+              if (data) {
+                track('createVariables', {
+                  type: 'themes',
+                  totalVariables: data.totalVariables,
+                  themeCount: selectedThemes.length,
+                  variablesColor: settings.variablesColor,
+                  variablesNumber: settings.variablesNumber,
+                  variablesString: settings.variablesString,
+                  variablesBoolean: settings.variablesBoolean,
+                  removeStylesAndVariablesWithoutConnection: settings.removeStylesAndVariablesWithoutConnection,
+                  renameExistingStylesAndVariables: settings.renameExistingStylesAndVariables,
+                });
+                transaction.setMeasurement('variables', data.totalVariables, '');
+              }
+            },
           },
-        },
-        async () => await AsyncMessageChannel.ReactInstance.message({
-          type: AsyncMessageTypes.CREATE_LOCAL_VARIABLES,
-          tokens,
-          settings,
-          selectedThemes,
-          serverResolvedTokens: storageType.provider === StorageProviderType.TOKENS_STUDIO_OAUTH ? serverResolvedTokens : null,
-        }),
-      );
-      dispatch.tokenState.assignVariableIdsToTheme(createVariableResult.variableIds);
-      dispatch.uiState.completeJob(BackgroundJobs.UI_CREATEVARIABLES);
-      Promise.resolve();
+          async () => await AsyncMessageChannel.ReactInstance.message({
+            type: AsyncMessageTypes.CREATE_LOCAL_VARIABLES,
+            tokens,
+            settings,
+            selectedThemes,
+            serverResolvedTokens: perThemeServerResolvedTokens,
+          }),
+        );
+        dispatch.tokenState.assignVariableIdsToTheme(createVariableResult.variableIds);
+      } finally {
+        // Always tear down the spinner — otherwise a thrown fetch/dispatch
+        // leaves the infinite UI_CREATEVARIABLES job stuck forever.
+        dispatch.uiState.completeJob(BackgroundJobs.UI_CREATEVARIABLES);
+      }
     },
-    [dispatch.tokenState, dispatch.uiState, tokens, settings, serverResolvedTokens, storageType],
+    [dispatch.tokenState, dispatch.uiState, tokens, settings, storageType, serverResolverContext, themes, store],
   );
 
   const renameVariablesFromToken = useCallback(
@@ -764,6 +832,29 @@ export default function useTokens() {
       dispatch.tokenState.renameVariableIdsToTheme(result.renameVariableToken);
     },
     [dispatch.tokenState],
+  );
+
+  const removeVariablesFromToken = useCallback(
+    async (tokenName: string) => {
+      track('removeVariables', { tokenName });
+
+      const { themes: tokenStateThemes } = store.getState().tokenState;
+      const variableKeys = tokenStateThemes.reduce<string[]>((acc, theme) => {
+        const key = theme.$figmaVariableReferences?.[tokenName];
+        if (key && !acc.includes(key)) {
+          acc.push(key);
+        }
+        return acc;
+      }, []);
+
+      if (variableKeys.length === 0) return;
+
+      await wrapTransaction({ name: 'removeVariables' }, async () => AsyncMessageChannel.ReactInstance.message({
+        type: AsyncMessageTypes.REMOVE_VARIABLES,
+        variableKeys,
+      }));
+    },
+    [store],
   );
 
   const updateVariablesFromToken = useCallback(async (payload: UpdateTokenVariablePayload) => {
@@ -797,6 +888,7 @@ export default function useTokens() {
       createVariables,
       createVariablesFromSets,
       renameVariablesFromToken,
+      removeVariablesFromToken,
       createVariablesFromThemes,
       updateVariablesFromToken,
       filterMultiValueTokens,
@@ -823,6 +915,7 @@ export default function useTokens() {
       createVariablesFromSets,
       createVariablesFromThemes,
       renameVariablesFromToken,
+      removeVariablesFromToken,
       updateVariablesFromToken,
       filterMultiValueTokens,
     ],

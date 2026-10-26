@@ -22,6 +22,20 @@ function processTokenValue(value: any, tokenType: string): any {
   return value;
 }
 
+// Normalize legacy deprecation for DTCG, then place metadata after $value.
+// Upstream metadata keeps its full object shape.
+export function reorderDeprecatedLast(token: Record<string, any>): void {
+  if (token.deprecated !== undefined && !token.$deprecated && TokenFormat.format === TokenFormatOptions.DTCG) {
+    token.$deprecated = token.deprecated;
+    delete token.deprecated;
+  }
+  if ('$deprecated' in token) {
+    const deprecated = token.$deprecated;
+    delete token.$deprecated;
+    token.$deprecated = deprecated;
+  }
+}
+
 export default function stringifyTokens(
   tokens: Record<string, AnyTokenList>,
   activeTokenSet: string,
@@ -44,6 +58,7 @@ export default function stringifyTokens(
         delete tokenInJSON.description;
       }
       delete tokenInJSON.type;
+      reorderDeprecatedLast(tokenInJSON);
       set(tokenObj, token.name, tokenInJSON, { merge: true });
     } else {
       const tokenInJSON: TokenInJSON = tokenWithoutName;
@@ -55,6 +70,7 @@ export default function stringifyTokens(
         delete tokenInJSON.value;
         delete tokenInJSON.description;
       }
+      reorderDeprecatedLast(tokenInJSON);
       set(tokenObj, token.name, tokenInJSON, { merge: true });
     }
   });

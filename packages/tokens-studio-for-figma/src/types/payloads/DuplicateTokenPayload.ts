@@ -1,6 +1,6 @@
 import { TokenTypes } from '@/constants/TokenTypes';
 import { ColorModifier } from '../Modifier';
-import { SingleToken } from '../tokens';
+import { SingleToken, DeprecatedProperty } from '../tokens';
 
 export type DuplicateTokenPayload = {
   parent: string;
@@ -12,6 +12,7 @@ export type DuplicateTokenPayload = {
   oldName?: string;
   shouldUpdate?: boolean;
   tokenSets: string[];
+  $deprecated?: DeprecatedProperty;
   $extensions?: {
     [key: string]: any;
     'studio.tokens'?: {

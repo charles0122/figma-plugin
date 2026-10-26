@@ -421,3 +421,16 @@ describe('TokenTooltip alias', () => {
     expect(getByTestId('not-found-badge')).toBeInTheDocument();
   });
 });
+
+describe('deprecation tooltip compatibility', () => {
+  it.each([
+    { deprecated: 'Use a newer token' },
+    { $deprecated: { severity: 'warning' as const, message: 'Use a newer token' } },
+  ])('shows the deprecation message for %j', (fields) => {
+    const token = {
+      name: 'old', type: TokenTypes.SIZING, value: '12', ...fields,
+    };
+    const result = render(<TokenTooltipContent token={token} />);
+    expect(result.getByText('Use a newer token')).toBeInTheDocument();
+  });
+});

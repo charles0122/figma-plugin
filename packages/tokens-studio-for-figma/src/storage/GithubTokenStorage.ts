@@ -239,7 +239,7 @@ export class GithubTokenStorage extends GitTokenStorage {
               }),
               {
                 maxRetries: 3,
-                initialDelayMs: 100,
+                initialDelayMs: 500,
               },
             );
           }));
@@ -274,10 +274,6 @@ export class GithubTokenStorage extends GitTokenStorage {
               }
 
               const tokenSet = parsed as AnyTokenSet<false>;
-              if (Object.keys(tokenSet).length === 0) {
-                return null;
-              }
-
               return {
                 path: filePath,
                 name,

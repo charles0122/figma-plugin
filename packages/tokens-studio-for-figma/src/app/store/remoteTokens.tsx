@@ -30,7 +30,7 @@ import { isEqual } from '@/utils/isEqual';
 import { categorizeError } from '@/utils/error/categorizeError';
 import usePullDialog from '../hooks/usePullDialog';
 import { Tabs } from '@/constants/Tabs';
-import { useTokensStudio, useTokensStudioOAuth } from './providers/tokens-studio';
+import { useTokensStudioOAuth } from './providers/tokens-studio';
 import { notifyToUI } from '@/plugin/notifiers';
 
 export type PushOverrides = { branch: string; commitMessage: string };
@@ -88,12 +88,6 @@ export default function useRemoteTokens() {
   const {
     addNewSupernovaCredentials, syncTokensWithSupernova, pushTokensToSupernova, pullTokensFromSupernova,
   } = useSupernova();
-  const {
-    addNewTokensStudioCredentials,
-    syncTokensWithTokensStudio,
-    pushTokensToTokensStudio,
-    pullTokensFromTokensStudio,
-  } = useTokensStudio();
   const {
     syncTokensWithTokensStudioOAuth,
     pullTokensFromTokensStudioOAuth,
@@ -154,11 +148,6 @@ export default function useRemoteTokens() {
           }
           case StorageProviderType.SUPERNOVA: {
             remoteData = await pullTokensFromSupernova(context);
-            break;
-          }
-          case StorageProviderType.TOKENS_STUDIO: {
-            remoteData = await pullTokensFromTokensStudio(context);
-            dispatch.tokenState.setTokenFormat(TokenFormatOptions.DTCG);
             break;
           }
           case StorageProviderType.TOKENS_STUDIO_OAUTH: {
@@ -258,13 +247,15 @@ export default function useRemoteTokens() {
               case StorageProviderType.URL: {
                 break;
               }
-              case StorageProviderType.TOKENS_STUDIO: {
-                dispatch.tokenState.setTokenSetMetadata(remoteData.metadata?.tokenSetsData ?? {});
-                break;
-              }
               case StorageProviderType.TOKENS_STUDIO_OAUTH: {
                 dispatch.tokenState.setTokenSetMetadata(remoteData.metadata?.tokenSetsData ?? {});
                 if (remoteData.metadata?.changeSetId) {
+                  // In-session only: updateCredentials early-returns for OAuth
+                  // (see src/utils/credentials.ts), so we can't persist the
+                  // changeSetId to Figma pluginData here. After a plugin reload
+                  // the credentials come back without it and the first push
+                  // trips the "no changeSetId" guard in pushToTokensStudioOAuth.
+                  // Re-selecting the branch resolves a fresh changeSetId.
                   dispatch.uiState.setApiData({
                     ...context,
                     changeSetId: remoteData.metadata.changeSetId,
@@ -347,7 +338,6 @@ export default function useRemoteTokens() {
       showPullDialogError,
       closePullDialog,
       pullTokensFromSupernova,
-      pullTokensFromTokensStudio,
       pullTokensFromTokensStudioOAuth,
     ],
   );
@@ -379,11 +369,6 @@ export default function useRemoteTokens() {
         }
         case StorageProviderType.SUPERNOVA: {
           content = await syncTokensWithSupernova(context);
-          break;
-        }
-        case StorageProviderType.TOKENS_STUDIO: {
-          content = await syncTokensWithTokensStudio(context);
-          dispatch.tokenState.setTokenFormat(TokenFormatOptions.DTCG);
           break;
         }
         case StorageProviderType.TOKENS_STUDIO_OAUTH: {
@@ -419,7 +404,6 @@ export default function useRemoteTokens() {
       syncTokensWithBitbucket,
       syncTokensWithADO,
       syncTokensWithSupernova,
-      syncTokensWithTokensStudio,
       syncTokensWithTokensStudioOAuth,
     ],
   );
@@ -447,10 +431,6 @@ export default function useRemoteTokens() {
         }
         case StorageProviderType.SUPERNOVA: {
           pushResult = await pushTokensToSupernova(context);
-          break;
-        }
-        case StorageProviderType.TOKENS_STUDIO: {
-          pushResult = await pushTokensToTokensStudio(context);
           break;
         }
         case StorageProviderType.TOKENS_STUDIO_OAUTH: {
@@ -491,7 +471,6 @@ export default function useRemoteTokens() {
       pushTokensToBitbucket,
       pushTokensToADO,
       pushTokensToSupernova,
-      pushTokensToTokensStudio,
       pushTokensToTokensStudioOAuth,
       tokens,
       themes,
@@ -558,10 +537,6 @@ export default function useRemoteTokens() {
           content = await addNewSupernovaCredentials(credentials);
           break;
         }
-        case StorageProviderType.TOKENS_STUDIO: {
-          content = await addNewTokensStudioCredentials(credentials);
-          break;
-        }
         case StorageProviderType.TOKENS_STUDIO_OAUTH: {
           content = await syncTokensWithTokensStudioOAuth(credentials as any);
           break;
@@ -597,7 +572,6 @@ export default function useRemoteTokens() {
       addNewBitbucketCredentials,
       addNewADOCredentials,
       addNewSupernovaCredentials,
-      addNewTokensStudioCredentials,
       syncTokensWithTokensStudioOAuth,
       createNewJSONBin,
       createNewGenericVersionedStorage,

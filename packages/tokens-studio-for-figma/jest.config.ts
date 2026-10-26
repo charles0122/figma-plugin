@@ -1,6 +1,13 @@
 // @ts-ignore This is due to weird @types/node issues based on hoistng
 require('dotenv').config();
 
+// msw can only intercept absolute URLs. Default the service URLs that aren't always set: CI gets
+// TOKEN_FLOW_APP_URL from a secret (missing on fork PRs) and never sets SUPABASE_URL.
+// @ts-ignore Same @types/node issue as above
+const { env } = process;
+env.TOKEN_FLOW_APP_URL = env.TOKEN_FLOW_APP_URL || 'https://token-flow.test';
+env.SUPABASE_URL = env.SUPABASE_URL || 'https://supabase.test';
+
 /*
  * For a detailed explanation regarding each configuration property and type check, visit:
  * https://jestjs.io/docs/en/configuration.html
@@ -181,7 +188,7 @@ export default {
   // },
   // An array of regexp pattern strings that are matched against all source file paths, matched files will skip transformation
   transformIgnorePatterns: [
-    '/node_modules/(?!(@figma-plugin|react-dnd|@react-dnd|react-colorful|dnd-core|react-dnd-html5-backend|culori|dot-prop|@tokens-studio/sdk|@apollo/client)/)',
+    '/node_modules/(?!(@figma-plugin|react-dnd|@react-dnd|react-colorful|dnd-core|react-dnd-html5-backend|culori|dot-prop)/)',
     '\\.pnp\\.[^\\/]+$',
   ],
 

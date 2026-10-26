@@ -327,7 +327,7 @@ describe('GithubTokenStorage', () => {
     mockGetContent.mockClear();
   });
 
-  it('can read from Git in a multi file format and return empty array when there is no content', async () => {
+  it('preserves empty token set files in multi-file mode so user-created empty sets survive a reopen', async () => {
     mockGetContent.mockImplementation((opts: { path: string }) => {
       if (opts.path === '') {
         return Promise.resolve({
@@ -367,7 +367,14 @@ describe('GithubTokenStorage', () => {
 
     storageProvider.enableMultiFile();
     storageProvider.changePath('data');
-    expect(await storageProvider.read()).toEqual([]);
+    expect(await storageProvider.read()).toEqual([
+      {
+        path: 'data/empty.json',
+        name: 'empty',
+        type: 'tokenSet',
+        data: {},
+      },
+    ]);
 
     mockGetContent.mockClear();
   });
@@ -588,6 +595,40 @@ describe('GithubTokenStorage', () => {
     ]);
 
     mockGetContent.mockClear();
+  });
+
+  it('retries a file download that fails at the network level instead of failing the whole read', async () => {
+    const filePaths = Array.from({ length: 20 }, (_, i) => `data/set-${String(i).padStart(2, '0')}.json`);
+    const attempts: Record<string, number> = {};
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    mockGetContent.mockImplementation(async (opts: { path: string }) => {
+      if (opts.path === '') {
+        return { data: [{ path: 'data', sha: 'sha(data)', type: 'dir' }] };
+      }
+      if (opts.path === 'data') {
+        return { data: filePaths.map((path) => ({ path, sha: `sha(${path})`, type: 'file' })) };
+      }
+      attempts[opts.path] = (attempts[opts.path] ?? 0) + 1;
+      if (opts.path === filePaths[7] && attempts[opts.path] === 1) {
+        // What octokit throws when the browser reports net::ERR_FAILED: an HttpError with status 500 and no response
+        throw Object.assign(new Error('Failed to fetch'), { name: 'HttpError', status: 500 });
+      }
+      return { data: JSON.stringify({ [opts.path]: { type: 'color', value: '#ff0000' } }) };
+    });
+    mockGetTree.mockImplementationOnce(() => Promise.resolve({
+      data: { sha: 'sha(data)', tree: filePaths.map((path) => ({ path, type: 'blob', sha: `sha(${path})` })) },
+    }));
+    storageProvider.enableMultiFile();
+    storageProvider.changePath('data');
+
+    try {
+      const result = await storageProvider.read();
+
+      expect(result).toHaveLength(filePaths.length);
+      expect(attempts[filePaths[7]]).toBe(2);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('should return an error message when reading results in an error', async () => {

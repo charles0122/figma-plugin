@@ -11,6 +11,7 @@ import { BackgroundJobs } from '@/constants/BackgroundJobs';
 import { mergeVariableReferencesWithLocalVariables } from './mergeVariableReferences';
 import { findCollectionAndModeIdForTheme } from './findCollectionAndModeIdForTheme';
 import { createNecessaryVariableCollections } from './createNecessaryVariableCollections';
+import { truncateModeName } from '@/utils/truncateName';
 import { getVariablesWithoutZombies } from './getVariablesWithoutZombies';
 import { getCodeSyntaxValue } from '@/utils/figma';
 import { getOverallConfig } from '@/utils/tokenHelpers';
@@ -24,6 +25,16 @@ export type LocalVariableInfo = {
   variableIds: Record<string, string>
 };
 
+// Pick the server-resolved delta for a single theme from the per-theme map.
+// Centralised so the theme.id key convention has exactly one owner — a
+// future rename only has to update this helper.
+function deltaFor(
+  serverResolvedTokens: Record<string, Record<string, string>> | null | undefined,
+  themeId: string,
+): Record<string, string> | null {
+  return serverResolvedTokens?.[themeId] ?? null;
+}
+
 /**
 * This function is used to create and update variables based on themes
 * - It first creates the necessary variable collections and modes or returns existing ones
@@ -31,7 +42,7 @@ export type LocalVariableInfo = {
 * - Then goes on to update variables for each theme
 * - There's another step that we perform where we check if any variables need to be using references to other variables. This is a second step, as we need to have all variables created first before we can reference them.
 * */
-export default async function createLocalVariablesInPlugin(tokens: Record<string, AnyTokenList>, settings: SettingsState, selectedThemes?: string[], serverResolvedTokens?: Record<string, string> | null) {
+export default async function createLocalVariablesInPlugin(tokens: Record<string, AnyTokenList>, settings: SettingsState, selectedThemes?: string[], serverResolvedTokens?: Record<string, Record<string, string>> | null) {
   // Big O (n * m * x): (n: amount of themes, m: amount of variableCollections, x: amount of modes)
   const themeInfo = await AsyncMessageChannel.PluginInstance.message({
     type: AsyncMessageTypes.GET_THEME_INFO,
@@ -46,7 +57,7 @@ export default async function createLocalVariablesInPlugin(tokens: Record<string
 
   let figmaVariablesAfterCreate = 0;
 
-  const checkSetting = !settings.variablesBoolean && !settings.variablesColor && !settings.variablesNumber && !settings.variablesString;
+  const checkSetting = !settings.variablesBoolean && !settings.variablesColor && !settings.variablesNumber && !settings.variablesString && !settings.variablesMotion;
   if (!checkSetting && selectedThemes && selectedThemes.length > 0) {
     // Show preparation phase
     postToUI({
@@ -58,12 +69,12 @@ export default async function createLocalVariablesInPlugin(tokens: Record<string
     });
 
     const overallConfig = getOverallConfig(themeInfo.themes, selectedThemes);
-    const collections = await createNecessaryVariableCollections(themeInfo.themes, selectedThemes);
+    const collections = await createNecessaryVariableCollections(themeInfo.themes, selectedThemes, settings);
 
     // Calculate total number of variables for progress tracking
     const totalVariableTokens = selectedThemeObjects.reduce((total, theme) => {
       const { tokensToCreate } = generateTokensToCreate({
-        theme, tokens, overallConfig, serverResolvedTokens,
+        theme, tokens, overallConfig, serverResolvedTokens: deltaFor(serverResolvedTokens, theme.id),
       });
       const variableTokenCount = tokensToCreate.filter((token) => checkIfTokenCanCreateVariable(token, settings)).length;
       return total + variableTokenCount;
@@ -102,6 +113,16 @@ export default async function createLocalVariablesInPlugin(tokens: Record<string
       });
     }
 
+    // Sort themes: process parent themes before extended themes
+    // Extended collections need parent variables to exist first
+    const sortedThemeObjects = [...selectedThemeObjects].sort((a, b) => {
+      // Extended themes should come after their parents
+      if (a.$figmaIsExtension && !b.$figmaIsExtension) return 1;
+      if (!a.$figmaIsExtension && b.$figmaIsExtension) return -1;
+      // Both same type, maintain order
+      return 0;
+    });
+
     /**
      * We perform a pre-flight scan across ALL selected themes. We build a global map
      * (`providedPlatformsByVariable`) of every platform that HAS a value defined
@@ -112,7 +133,7 @@ export default async function createLocalVariablesInPlugin(tokens: Record<string
      */
     selectedThemeObjects.forEach((theme) => {
       const { tokensToCreate } = generateTokensToCreate({
-        theme, tokens, overallConfig, serverResolvedTokens,
+        theme, tokens, overallConfig, serverResolvedTokens: deltaFor(serverResolvedTokens, theme.id),
       });
       tokensToCreate.forEach((token) => {
         const figmaExtensions = token.$extensions?.['com.figma'] as FigmaExtensions;
@@ -130,8 +151,23 @@ export default async function createLocalVariablesInPlugin(tokens: Record<string
     });
 
     // Process themes sequentially
-    for (const theme of selectedThemeObjects) {
-      const { collection, modeId } = findCollectionAndModeIdForTheme(theme.group ?? theme.name, theme.name, collections);
+    for (const theme of sortedThemeObjects) {
+      const lookup = findCollectionAndModeIdForTheme(theme.group ?? theme.name, theme.name, collections);
+      let collection: VariableCollection | undefined = lookup.collection;
+      let modeId: string | undefined = lookup.modeId;
+
+      // Extended (child) collections are named WITHOUT the parent-group prefix
+      // ("Brand", not "Colors/Brand"), so the name-based lookup misses themes
+      // whose group carries the imported "Parent/Child" form. Fall back to the
+      // collection id backfilled during collection creation.
+      if ((!collection || !modeId) && theme.$figmaCollectionId) {
+        const collectionById = collections.find((c) => c.id === theme.$figmaCollectionId);
+        if (collectionById) {
+          collection = collectionById;
+          modeId = (collectionById.modes.find((m) => m.modeId === theme.$figmaModeId)
+            ?? collectionById.modes.find((m) => m.name === theme.name || m.name === truncateModeName(theme.name)))?.modeId;
+        }
+      }
 
       if (collection && modeId) {
         // Use overallConfig to allow cross-theme token references
@@ -145,7 +181,7 @@ export default async function createLocalVariablesInPlugin(tokens: Record<string
           progressTracker: globalProgressTracker,
           metadataUpdateTracker,
           providedPlatformsByVariable,
-          serverResolvedTokens,
+          serverResolvedTokens: deltaFor(serverResolvedTokens, theme.id),
         });
 
         figmaVariablesAfterCreate += allVariableObj.removedVariables.length;

@@ -1,11 +1,16 @@
 import React from 'react';
 import { Provider } from 'react-redux';
 import userEvent from '@testing-library/user-event';
+import { useIsProUser } from '@/app/hooks/useIsProUser';
 import { Tabs } from '@/constants/Tabs';
 import {
   act, createMockStore, render, waitFor,
 } from '../../../../tests/config/setupTest';
 import Navbar from '../Navbar';
+
+jest.mock('@/app/hooks/useIsProUser', () => ({ useIsProUser: jest.fn() }));
+const mockUseIsProUser = useIsProUser as jest.MockedFunction<typeof useIsProUser>;
+beforeEach(() => mockUseIsProUser.mockReturnValue(false));
 
 describe('Navbar', () => {
   it('should work', async () => {
@@ -22,7 +27,7 @@ describe('Navbar', () => {
     expect(mockStore.getState().uiState.activeTab).toEqual(Tabs.SETTINGS);
   });
 
-  it('displays the token flow button if user has access to it via license key', () => {
+  it('displays the token flow button if user has access to it via license key', async () => {
     const mockStore = createMockStore({});
     const result = render(
       <Provider store={mockStore}>
@@ -34,27 +39,10 @@ describe('Navbar', () => {
       result.getByTestId('token-flow-button');
     }).toThrowError();
 
+    mockUseIsProUser.mockReturnValue(true);
     mockStore.dispatch.userState.setLicenseKey('test-key-123');
-    waitFor(() => {
-      const tokenFlowButton = result.getByTestId('token-flow-button');
-      expect(tokenFlowButton).toBeInTheDocument();
-    });
-  });
-
-  it('displays the token flow button if user has access to it via Studio PAT', () => {
-    const mockStore = createMockStore({});
-    const result = render(
-      <Provider store={mockStore}>
-        <Navbar />
-      </Provider>,
-    );
-
-    expect(() => {
-      result.getByTestId('token-flow-button');
-    }).toThrowError();
-
-    mockStore.dispatch.userState.setTokensStudioPAT('studio-pat-token-123');
-    waitFor(() => {
+    result.rerender(<Provider store={mockStore}><Navbar /></Provider>);
+    await waitFor(() => {
       const tokenFlowButton = result.getByTestId('token-flow-button');
       expect(tokenFlowButton).toBeInTheDocument();
     });
@@ -70,16 +58,18 @@ describe('Navbar', () => {
         <Navbar />
       </Provider>,
     );
+    mockUseIsProUser.mockReturnValue(true);
     mockStore.dispatch.userState.setLicenseKey('test-key-123');
+    result.rerender(<Provider store={mockStore}><Navbar /></Provider>);
 
     const tokenFlowButton = await result.findByTestId('token-flow-button');
-    waitFor(() => {
-      userEvent.click(tokenFlowButton);
+    await userEvent.click(tokenFlowButton);
+    await waitFor(() => {
       expect(global.open).toHaveBeenCalledWith(`${process.env.TOKEN_FLOW_APP_URL}?id=test-id`);
     });
   });
 
-  it('displays the second screen icon if user has access to it via license key', () => {
+  it('displays the second screen icon if user has access to it via license key', async () => {
     const mockStore = createMockStore({});
     const result = render(
       <Provider store={mockStore}>
@@ -89,25 +79,10 @@ describe('Navbar', () => {
 
     expect(result.queryByLabelText('Second Screen')).not.toBeInTheDocument();
 
+    mockUseIsProUser.mockReturnValue(true);
     mockStore.dispatch.userState.setLicenseKey('test-key-123');
-    waitFor(() => {
-      const secondScreenButton = result.getByLabelText('Second Screen');
-      expect(secondScreenButton).toBeInTheDocument();
-    });
-  });
-
-  it('displays the second screen icon if user has access to it via Studio PAT', () => {
-    const mockStore = createMockStore({});
-    const result = render(
-      <Provider store={mockStore}>
-        <Navbar />
-      </Provider>,
-    );
-
-    expect(result.queryByLabelText('Second Screen')).not.toBeInTheDocument();
-
-    mockStore.dispatch.userState.setTokensStudioPAT('studio-pat-token-123');
-    waitFor(() => {
+    result.rerender(<Provider store={mockStore}><Navbar /></Provider>);
+    await waitFor(() => {
       const secondScreenButton = result.getByLabelText('Second Screen');
       expect(secondScreenButton).toBeInTheDocument();
     });

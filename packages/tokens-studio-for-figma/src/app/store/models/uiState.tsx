@@ -79,6 +79,7 @@ export interface UIState {
   showPushDialog: { state: string | false, overrides?: PushOverrides };
   showPullDialog: string | false;
   showEmptyGroups: boolean;
+  hideDeprecatedTokens: boolean;
   collapsed: boolean;
   selectedLayers: number;
   manageThemesModalOpen: boolean;
@@ -146,6 +147,7 @@ export const uiState = createModel<RootModel>()({
     showPushDialog: { state: false },
     showPullDialog: false,
     showEmptyGroups: true,
+    hideDeprecatedTokens: false,
     collapsed: false,
     selectedLayers: 0,
     manageThemesModalOpen: false,
@@ -207,17 +209,9 @@ export const uiState = createModel<RootModel>()({
         formId: data.formId,
       },
     }),
-    setSelectedLayers: (state, data: number) => ({
-      ...state,
-      selectedLayers: data,
-    }),
     setHideConfirm: (state) => ({
       ...state,
       confirmState: defaultConfirmState,
-    }),
-    setDisabled: (state, data: boolean) => ({
-      ...state,
-      disabled: data,
     }),
     setEditToken: (state, data: EditTokenObject) => ({
       ...state,
@@ -235,17 +229,16 @@ export const uiState = createModel<RootModel>()({
         displayType: data,
       };
     },
-    setSelectionValues: (state, data: SelectionGroup[]) => ({
+    // Applies a whole selection update in one dispatch. Every dispatch makes each mounted token
+    // re-check its subscriptions, so splitting one update over several dispatches multiplies that cost.
+    setSelection: (state, data: {
+      selectedLayers: number;
+      disabled: boolean;
+      mainNodeSelectionValues: SelectionValue;
+      selectionValues: SelectionGroup[];
+    }) => ({
       ...state,
-      selectionValues: data,
-    }),
-    setMainNodeSelectionValues: (state, data: SelectionValue) => ({
-      ...state,
-      mainNodeSelectionValues: data,
-    }),
-    resetSelectionValues: (state) => ({
-      ...state,
-      selectionValues: [] as SelectionGroup[],
+      ...data,
     }),
     startJob(state, job: BackgroundJob) {
       return {
@@ -349,6 +342,12 @@ export const uiState = createModel<RootModel>()({
       return {
         ...state,
         showEmptyGroups: payload == null ? !state.showEmptyGroups : payload,
+      };
+    },
+    toggleHideDeprecatedTokens(state, payload: boolean | null) {
+      return {
+        ...state,
+        hideDeprecatedTokens: payload == null ? !state.hideDeprecatedTokens : payload,
       };
     },
     toggleCollapsed(state) {
@@ -478,6 +477,12 @@ export const uiState = createModel<RootModel>()({
       AsyncMessageChannel.ReactInstance.message({
         type: AsyncMessageTypes.SET_SHOW_EMPTY_GROUPS,
         showEmptyGroups: payload == null ? rootState.uiState.showEmptyGroups : payload,
+      });
+    },
+    toggleHideDeprecatedTokens(payload: null | boolean, rootState) {
+      AsyncMessageChannel.ReactInstance.message({
+        type: AsyncMessageTypes.SET_HIDE_DEPRECATED_TOKENS,
+        hideDeprecatedTokens: payload === null ? rootState.uiState.hideDeprecatedTokens : payload,
       });
     },
     setSelectedExportThemes: (payload: string[]) => {

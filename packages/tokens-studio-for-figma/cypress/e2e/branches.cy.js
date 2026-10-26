@@ -83,8 +83,13 @@ describe('Branch switcher', () => {
     // Should now show the create branch modal
     cy.get('input[name=branch]').type('new-branch');
     cy.get('button[type=submit]').click();
-    // Verify the new branch appears in the list
+    // Creating the branch is async; the selector switches to the new branch once it's done
+    cy.get('[data-testid=branch-selector-menu-trigger]').should('contain', 'new-branch');
+    // Opening the selector refetches the branch list, so wait for that before checking the list
+    cy.intercept('GET', '**/repos/122/figma-tokens/branches*').as('refetchBranches');
     cy.get('[data-testid=branch-selector-menu-trigger]').click();
+    cy.wait('@refetchBranches');
+    // Verify the new branch appears in the list
     cy.get('[data-testid=popover-item-new-branch]').should('have.length', 1);
   });
 
@@ -171,19 +176,19 @@ describe('Branch switcher', () => {
     cy.get('[data-testid=push-dialog-success-heading]').should('have.length', 1);
   });
 
-  it('shows pro upgrade modal for non-pro users', () => {
-    // Create a non-pro user setup
-    const nonProUserParams = {
+  it('keeps branching available with the team Pro override when no license is stored', () => {
+    const unlicensedUserParams = {
       ...mockStartupParams,
-      licenseKey: null, // Remove license to make user non-pro
+      licenseKey: null,
     };
 
-    cy.startup(nonProUserParams);
+    cy.startup(unlicensedUserParams);
     cy.get('[data-testid=branch-selector-menu-trigger]').click();
 
-    // Should show pro upgrade modal
-    cy.contains('Branching is a feature of the Pro subscription').should('be.visible');
-    cy.contains('You can switch branches, create new ones from current changes or any other branch, easily find branches, and collaborate seamlessly with your team. Branching enables powerful version control and team collaboration workflows.').should('be.visible');
+    // The maintained version intentionally grants Pro through its existing debug override.
+    cy.get('[data-testid=popover-item-main]').should('be.visible');
+    cy.get('[data-testid=popover-item-development]').should('be.visible');
+    cy.contains('Branching is a feature of the Pro subscription').should('not.exist');
   });
 
   it('allows searching branches', () => {

@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { getTokenDeprecation } from '@/utils/tokenDeprecation';
 import { SingleToken } from '@/types/tokens';
 import { TokenTooltipContentValue } from './TokenTooltipContentValue';
 import Box from '../Box';
@@ -15,6 +16,7 @@ type Props = {
 
 export const TokenTooltipContent: React.FC<React.PropsWithChildren<React.PropsWithChildren<Props>>> = ({ token }) => {
   const { t } = useTranslation(['tokens']);
+  const deprecation = getTokenDeprecation(token);
   const tokensContext = React.useContext(TokensContext);
   const { count: referenceCount } = useTokenReferences(token.name);
 
@@ -35,9 +37,9 @@ export const TokenTooltipContent: React.FC<React.PropsWithChildren<React.PropsWi
           position: 'relative',
         }}
       >
-        {token.name.split('.')[token.name.split('.').length - 1]}  
+        {token.name.split('.')[token.name.split('.').length - 1]}
         {failedToResolve ? <NotFoundBadge /> : null}
-        {token.deprecated && (
+        {deprecation && (
           <Box
             css={{
               padding: '$1 $2',
@@ -50,14 +52,14 @@ export const TokenTooltipContent: React.FC<React.PropsWithChildren<React.PropsWi
           >
             {t('deprecated')}
           </Box>
-        )} 
+        )}
       </Stack>
 
       <Stack direction="column" align="start" gap={2} wrap>
         <TokenTooltipContentValue token={token} />
       </Stack>
       {token.description && <Box css={{ color: '$tooltipFgMuted', padding: '$1 $2' }}>{token.description}</Box>}
-      {token.deprecated && typeof token.deprecated === 'string' && (
+      {deprecation?.message && (
         <Box
           css={{
             color: '$warningFg',
@@ -69,9 +71,10 @@ export const TokenTooltipContent: React.FC<React.PropsWithChildren<React.PropsWi
           }}
         >
           <Text size="xsmall" bold css={{ marginBottom: '$1', display: 'block' }}>
-            {t('deprecated')}:
+            {t('deprecated')}
+            :
           </Text>
-          <Text size="xsmall">{token.deprecated}</Text>
+          <Text size="xsmall">{deprecation.message}</Text>
         </Box>
       )}
       {referenceCount > 0 && (

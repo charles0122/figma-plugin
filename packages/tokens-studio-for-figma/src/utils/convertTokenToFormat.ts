@@ -19,7 +19,7 @@ export function convertTokenToFormat(token, isExpanded = false) {
     ...(value !== undefined ? { [TokenFormat.tokenValueKey]: value } : {}),
     ...(type ? { [TokenFormat.tokenTypeKey]: type } : {}),
     ...(description ? { [TokenFormat.tokenDescriptionKey]: description } : {}),
-    ...(deprecated !== undefined ? { [TokenFormat.tokenDeprecatedKey]: deprecated } : {}),
+    ...(deprecated !== undefined && !remainingTokenValues.$deprecated ? { [TokenFormat.tokenDeprecatedKey]: deprecated } : {}),
   };
   delete returnValue.inheritTypeLevel;
   return returnValue;

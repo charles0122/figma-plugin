@@ -1,6 +1,6 @@
 import { useDispatch, useStore } from 'react-redux';
 import { useCallback, useMemo } from 'react';
-import { SingleToken, TokenToRename } from '@/types/tokens';
+import { SingleToken, TokenToRename, DeprecatedProperty } from '@/types/tokens';
 import { Dispatch, RootState } from '../store';
 import useConfirm from '../hooks/useConfirm';
 import { BackgroundJobs } from '@/constants/BackgroundJobs';
@@ -11,6 +11,7 @@ import {
 } from '@/types/payloads';
 import useTokens from './useTokens';
 import { StyleOptions } from '@/constants/StyleOptions';
+import { tokenTypesToCreateVariable } from '@/constants/VariableTypes';
 import { ColorModifier } from '@/types/Modifier';
 import { wrapTransaction } from '@/profiling/transaction';
 
@@ -25,6 +26,7 @@ export type EditSingleTokenData = {
   deprecated?: boolean | string;
   oldName?: string;
   shouldUpdateDocument?: boolean;
+  $deprecated?: DeprecatedProperty;
   $extensions?: {
     [key: string]: any;
     'studio.tokens'?: {
@@ -43,6 +45,7 @@ export type CreateSingleTokenData = {
   description?: string;
   deprecated?: boolean | string;
   shouldUpdateDocument?: boolean;
+  $deprecated?: DeprecatedProperty;
   $extensions?: {
     [key: string]: any;
     'studio.tokens'?: {
@@ -58,14 +61,14 @@ export default function useManageTokens() {
   const store = useStore<RootState>();
   const dispatch = useDispatch<Dispatch>();
   const { confirm } = useConfirm();
-  const { removeStylesFromTokens } = useTokens();
+  const { removeStylesFromTokens, removeVariablesFromToken } = useTokens();
   const {
     editToken, createToken, deleteToken, duplicateToken, deleteTokenGroup, renameTokenGroup, duplicateTokenGroup, renameTokenAcrossSets, deleteDuplicateTokens,
   } = dispatch.tokenState;
 
   const editSingleToken = useCallback(async (data: EditSingleTokenData) => {
     const {
-      parent, type, name, value, description, deprecated, oldName, shouldUpdateDocument = true, $extensions,
+      parent, type, name, value, description, deprecated, oldName, shouldUpdateDocument = true, $deprecated, $extensions,
     } = data;
     dispatch.uiState.startJob({
       name: BackgroundJobs.UI_EDITSINGLETOKEN,
@@ -81,9 +84,10 @@ export default function useManageTokens() {
         type,
         value,
         description,
-        deprecated,
+        ...('deprecated' in data ? { deprecated } : {}),
         oldName,
         shouldUpdate: shouldUpdateDocument,
+        ...('$deprecated' in data ? { $deprecated } : {}),
         $extensions,
       } as UpdateTokenPayload);
       if (oldName) {
@@ -96,7 +100,7 @@ export default function useManageTokens() {
 
   const createSingleToken = useCallback(async (data: CreateSingleTokenData) => {
     const {
-      parent, type, name, value, description, deprecated, shouldUpdateDocument = true, $extensions,
+      parent, type, name, value, description, deprecated, shouldUpdateDocument = true, $deprecated, $extensions,
     } = data;
     dispatch.uiState.startJob({
       name: BackgroundJobs.UI_CREATESINGLETOKEN,
@@ -119,6 +123,7 @@ export default function useManageTokens() {
         description,
         deprecated,
         shouldUpdate: shouldUpdateDocument,
+        $deprecated,
         $extensions,
       } as UpdateTokenPayload);
     }
@@ -136,9 +141,17 @@ export default function useManageTokens() {
 
   const deleteSingleToken = useCallback(async (data: DeleteTokenPayload) => {
     const choices: Choice[] = [];
-    if (store.getState().tokenState.themes.length > 0 && data.type && [TokenTypes.COLOR, TokenTypes.TYPOGRAPHY, TokenTypes.BOX_SHADOW].includes(data?.type)) {
+    const { themes } = store.getState().tokenState;
+    const hasConnectedStyle = themes.some((theme) => !!theme.$figmaStyleReferences?.[data.path]);
+    if (hasConnectedStyle && data.type && [TokenTypes.COLOR, TokenTypes.TYPOGRAPHY, TokenTypes.BOX_SHADOW, TokenTypes.GRADIENT].includes(data?.type)) {
       choices.push({
         key: StyleOptions.REMOVE, label: 'Delete associated style',
+      });
+    }
+    const hasConnectedVariable = themes.some((theme) => !!theme.$figmaVariableReferences?.[data.path]);
+    if (hasConnectedVariable && data.type && tokenTypesToCreateVariable.includes(data.type as TokenTypes)) {
+      choices.push({
+        key: StyleOptions.REMOVE_VARIABLE, label: 'Delete connected variable',
       });
     }
 
@@ -166,11 +179,14 @@ export default function useManageTokens() {
       if (Array.isArray(userConfirmation.data) && userConfirmation.data.includes(StyleOptions.REMOVE)) {
         removeStylesFromTokens(data);
       }
+      if (Array.isArray(userConfirmation.data) && userConfirmation.data.includes(StyleOptions.REMOVE_VARIABLE)) {
+        removeVariablesFromToken(data.path);
+      }
       dispatch.uiState.completeJob(BackgroundJobs.UI_DELETETOKEN);
       dispatch.tokenState.removeStyleNamesFromThemes(data.path, data.parent); // TODO: This triggers an updateDocument call
       dispatch.tokenState.removeVariableNamesFromThemes(data.path, data.parent); // TODO: This triggers an updateDocument call - its own!
     }
-  }, [confirm, deleteToken, dispatch.uiState]);
+  }, [confirm, deleteToken, dispatch.uiState, removeVariablesFromToken, removeStylesFromTokens]);
 
   const deleteGroup = useCallback(async (path: string, type: string) => {
     const userConfirmation = await confirm({

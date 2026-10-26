@@ -109,4 +109,20 @@ describe('TokenGroup', () => {
     await fireEvent.click(result.getAllByTestId('button-add-new-token-in-group')[0]);
     expect(showNewForm).toBeCalledTimes(1);
   });
+
+  it('hides legacy and native deprecated tokens while retaining false and ordinary tokens', () => {
+    store.dispatch.uiState.toggleHideDeprecatedTokens(true);
+    const base = { type: TokenTypes.SIZING, value: '1' };
+    const values = {
+      legacy: { ...base, name: 'legacy', deprecated: 'Use current' },
+      native: { ...base, name: 'native', $deprecated: { severity: 'warning', message: 'Use current' } },
+      current: { ...base, name: 'current', deprecated: false },
+      ordinary: { ...base, name: 'ordinary' },
+    };
+    const result = render(<TokenGroup tokenValues={values as DeepKeyTokenMap} showNewForm={showNewForm} showForm={showForm} schema={schema as TokenTypeSchema} />);
+    expect(result.queryByText('legacy')).not.toBeInTheDocument();
+    expect(result.queryByText('native')).not.toBeInTheDocument();
+    expect(result.getByText('current')).toBeInTheDocument();
+    expect(result.getByText('ordinary')).toBeInTheDocument();
+  });
 });

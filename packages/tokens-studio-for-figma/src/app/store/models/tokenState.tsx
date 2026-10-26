@@ -4,6 +4,7 @@ import omit from 'just-omit';
 import { createModel } from '@rematch/core';
 import extend from 'just-extend';
 import { v4 as uuidv4 } from 'uuid';
+import { getTokenDeprecation } from '@/utils/tokenDeprecation';
 import * as tokenStateReducers from './reducers/tokenState';
 import * as tokenStateEffects from './effects/tokenState';
 import parseTokenValues from '@/utils/parseTokenValues';
@@ -43,18 +44,10 @@ import { RenameTokensAcrossSetsPayload } from '@/types/payloads/RenameTokensAcro
 import { wrapTransaction } from '@/profiling/transaction';
 import addIdPropertyToTokens from '@/utils/addIdPropertyToTokens';
 import { TokenFormat, TokenFormatOptions, setFormat } from '@/plugin/TokenFormatStoreClass';
-import { pushToTokensStudio, pushToTokensStudioOAuth } from '../providers/tokens-studio';
-import { StorageTypeCredential, TokensStudioStorageType, TokensStudioOAuthStorageType } from '@/types/StorageType';
-import {
-  createTokenInTokensStudio,
-  duplicateTokenInTokensStudio,
-  createTokenSetInTokensStudio,
-  updateTokenSetInTokensStudio,
-} from '@/storage/tokensStudio';
-import { deleteTokenSetFromTokensStudio } from '@/storage/tokensStudio/deleteTokenSetFromTokensStudio';
+import { pushToTokensStudioOAuth } from '../providers/tokens-studio';
+import { StorageTypeCredential, TokensStudioOAuthStorageType } from '@/types/StorageType';
 import { updateAliasesInState } from '../utils/updateAliasesInState';
 import { CreateSingleTokenData, EditSingleTokenData } from '../useManageTokens';
-import { singleTokensToRawTokenSet } from '@/utils/convert';
 import { checkStorageSize } from '@/utils/checkStorageSize';
 import { compareLastSyncedState } from '@/utils/compareLastSyncedState';
 import { RemoteTokenStorageMetadata } from '@/storage/RemoteTokenStorage';
@@ -106,6 +99,69 @@ export interface TokenState {
    * null = server hasn't responded yet or is unavailable → use local resolver only.
    */
   serverResolvedTokens: Record<string, string> | null;
+}
+
+// Figma has no font weight variable type, so a numeric font weight comes back from the import as a number
+// or px dimension, or as a fontWeights token when the variable is scoped to font weight alone.
+// Keep existing font weight tokens as unitless fontWeights instead of e.g. "400px" dimensions.
+function keepFontWeightType(existingToken: SingleToken, token: VariableToCreateToken): VariableToCreateToken {
+  if (existingToken.type !== TokenTypes.FONT_WEIGHTS) return token;
+  if (token.type !== TokenTypes.NUMBER && token.type !== TokenTypes.DIMENSION && token.type !== TokenTypes.FONT_WEIGHTS) return token;
+  const value = String(token.value);
+  if (value.startsWith('{')) return { ...token, type: TokenTypes.FONT_WEIGHTS };
+  const fontWeight = value.match(/^(-?\d*\.?\d+)(px)?$/)?.[1];
+  if (fontWeight === undefined) return token;
+  return { ...token, type: TokenTypes.FONT_WEIGHTS, value: typeof existingToken.value === 'number' ? Number(fontWeight) : fontWeight };
+}
+
+// Figma reports these defaults for every variable. Only import them when the token already has the key,
+// so a token that had specific scopes or was hidden still gets the change saved.
+const FIGMA_EXTENSION_DEFAULTS: Record<string, unknown> = {
+  'com.figma.scopes': ['ALL_SCOPES'],
+  'com.figma.hiddenFromPublishing': false,
+};
+
+function withoutDefaultFigmaExtensions(token: VariableToCreateToken, existingToken?: SingleToken): VariableToCreateToken {
+  if (!token.$extensions) return token;
+  const $extensions: Record<string, unknown> = { ...token.$extensions };
+  Object.entries(FIGMA_EXTENSION_DEFAULTS).forEach(([key, defaultValue]) => {
+    if (isEqual($extensions[key], defaultValue) && !(key in (existingToken?.$extensions ?? {}))) {
+      delete $extensions[key];
+    }
+  });
+  if (Object.keys($extensions).length === 0) return omit(token, '$extensions');
+  return { ...token, $extensions };
+}
+
+// Figma only knows the com.figma.* keys, so keep the token's other metadata, such as its Studio id. A color
+// modifier is left out: the value from Figma already is the final color.
+function withExistingExtensions(token: VariableToCreateToken, existingToken: SingleToken): VariableToCreateToken {
+  const existing = Object.entries(existingToken.$extensions ?? {}).filter(([key]) => !key.startsWith('com.figma.'));
+  if (existing.length === 0) return { ...token };
+  const $extensions: NonNullable<SingleToken['$extensions']> = Object.fromEntries(existing);
+  const studioTokens = omit($extensions['studio.tokens'] ?? {}, 'modify');
+  if (Object.keys(studioTokens).length > 0) {
+    $extensions['studio.tokens'] = studioTokens;
+  } else {
+    delete $extensions['studio.tokens'];
+  }
+  return { ...token, $extensions: { ...$extensions, ...token.$extensions } };
+}
+
+// The import only brings in the com.figma.* keys, so those are the only ones that can have changed in Figma.
+// Sorted, because isEqual also compares the order of keys and array items.
+function sortedFigmaExtensions($extensions: SingleToken['$extensions']): [string, unknown][] {
+  const sortDeep = (value: unknown): unknown => {
+    if (Array.isArray(value)) return [...value].sort();
+    if (value && typeof value === 'object') {
+      return Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, nested]) => [key, sortDeep(nested)]);
+    }
+    return value;
+  };
+  return Object.entries($extensions ?? {})
+    .filter(([key]) => key.startsWith('com.figma.'))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => [key, sortDeep(value)]);
 }
 
 export const tokenState = createModel<RootModel>()({
@@ -263,13 +319,26 @@ export const tokenState = createModel<RootModel>()({
       ...state,
       renamedCollections,
     }),
-    resetImportedTokens: (state) => ({
-      ...state,
-      importedTokens: {
-        newTokens: [],
-        updatedTokens: [],
-      },
-    }),
+    resetImportedTokens: (state) => {
+      // Strip the ephemeral fromVariableImport flag from all sets so a future style import
+      // targeting the same set names is not silently skipped.
+      const cleanedMetadata = Object.fromEntries(
+        Object.entries(state.tokenSetMetadata || {}).map(([key, meta]) => {
+          const { fromVariableImport, ...rest } = meta as any;
+          return [key, rest];
+        }),
+      );
+      return {
+        ...state,
+        importedTokens: {
+          newTokens: [],
+          updatedTokens: [],
+        },
+        // Renames belong to the import being closed
+        renamedCollections: null,
+        tokenSetMetadata: cleanedMetadata,
+      };
+    },
     setJSONData(state, payload) {
       const parsedTokens = parseJson(payload);
       parseTokenValues(parsedTokens, true);
@@ -319,7 +388,7 @@ export const tokenState = createModel<RootModel>()({
         }
         const existingTokenIndex = newTokens[token.parent].findIndex((n) => n.name === token.name);
         if (existingTokenIndex === -1) {
-          newTokens[token.parent].push(updateTokenPayloadToSingleToken(token as UpdateTokenPayload, uuidv4()));
+          newTokens[token.parent].push(updateTokenPayloadToSingleToken(token as UpdateTokenPayload));
         }
       });
 
@@ -332,11 +401,12 @@ export const tokenState = createModel<RootModel>()({
       // This is a deep clone of the tokens so that we force an update in the UI even if just the value changes
       const newTokens: TokenStore['values'] = JSON.parse(JSON.stringify(state.tokens));
       data.forEach((token) => {
-        const existingTokenIndex = newTokens[token.parent].findIndex((n) => n.name === token.name);
+        // A set can be gone after renamed collections are applied
+        const existingTokenIndex = newTokens[token.parent]?.findIndex((n) => n.name === token.name) ?? -1;
         if (existingTokenIndex > -1) {
           newTokens[token.parent] = [
             ...newTokens[token.parent].slice(0, existingTokenIndex),
-            updateTokenPayloadToSingleToken(token as UpdateTokenPayload, uuidv4()),
+            updateTokenPayloadToSingleToken(token as UpdateTokenPayload),
             ...newTokens[token.parent].slice(existingTokenIndex + 1),
           ];
         }
@@ -361,7 +431,7 @@ export const tokenState = createModel<RootModel>()({
               if (originalTokenIndex > -1) {
                 const existingTokens = [...state.tokens[tokenSet]];
                 existingTokens.splice(originalTokenIndex + 1, 0, {
-                  ...omit(state.tokens[tokenSet][originalTokenIndex], 'description', '$extensions'),
+                  ...omit(state.tokens[tokenSet][originalTokenIndex], 'description', 'deprecated', '$extensions', '$deprecated'),
                   ...updateTokenPayloadToSingleToken(
                     {
                       parent: data.parent,
@@ -370,6 +440,8 @@ export const tokenState = createModel<RootModel>()({
                       value: data.value,
                       description: data.description,
                       oldName: data.oldName,
+                      deprecated: data.deprecated,
+                      $deprecated: data.$deprecated,
                       $extensions: data.$extensions,
                     } as UpdateTokenPayload,
                     uuidv4(),
@@ -385,6 +457,8 @@ export const tokenState = createModel<RootModel>()({
                   type: data.type,
                   value: data.value,
                   description: data.description,
+                  deprecated: data.deprecated,
+                  $deprecated: data.$deprecated,
                   $extensions: data.$extensions,
                 } as UpdateTokenPayload,
                 uuidv4(),
@@ -461,35 +535,42 @@ export const tokenState = createModel<RootModel>()({
       const newTokens: VariableToCreateToken[] = [];
       const existingTokens: VariableToCreateToken[] = [];
       const updatedTokens: VariableToCreateToken[] = [];
+      // pullVariables sends renamed collections first. A renamed set doesn't exist under its new name until the
+      // import is applied, so compare its variables with the tokens of the set's old name.
+      const renamedFrom = Object.fromEntries((state.renamedCollections ?? []).map(([oldName, newName]) => [newName, oldName]));
 
       // Iterate over received styles and check if they existed before or need updating
       Object.values(receivedVariables).forEach((values) => {
         values.forEach((token) => {
+          const existingSet = state.tokens[token.parent] ?? state.tokens[renamedFrom[token.parent]];
           // If a set exists for the token
-          if (state.tokens[token.parent]) {
-            const oldValue = state.tokens[token.parent].find((t) => t.name === token.name);
+          if (existingSet) {
+            const oldValue = existingSet.find((t) => t.name === token.name);
             // If the token already exists
             if (oldValue) {
+              const importedToken = keepFontWeightType(oldValue, withoutDefaultFigmaExtensions(token, oldValue));
               const normalizedOldValueDescription = oldValue.description ?? '';
               const normalizedTokenDescription = token.description ?? '';
-              const normalizedOldValueExtensions = oldValue.$extensions ?? {};
-              const normalizedTokenExtensions = token.$extensions ?? {};
-              if (
-                isEqual(oldValue.value, token.value)
+              const normalizedOldValueExtensions = sortedFigmaExtensions(oldValue.$extensions);
+              const normalizedTokenExtensions = sortedFigmaExtensions(importedToken.$extensions);
+              const isUnchanged = isEqual(oldValue.value, importedToken.value)
                 && isEqual(normalizedOldValueDescription, normalizedTokenDescription)
-                && isEqual(normalizedOldValueExtensions, normalizedTokenExtensions)
-              ) {
+                && isEqual(normalizedOldValueExtensions, normalizedTokenExtensions);
+              if (isUnchanged && !state.tokens[token.parent]) {
+                // Still listed, so that Import all applies the rename
+                newTokens.push(withoutDefaultFigmaExtensions(token));
+              } else if (isUnchanged) {
                 existingTokens.push(token);
               } else {
-                const updatedToken = { ...token };
+                const updatedToken = withExistingExtensions(importedToken, oldValue);
                 updatedToken.oldValue = oldValue.value;
                 updatedTokens.push(updatedToken);
               }
             } else {
-              newTokens.push(token);
+              newTokens.push(withoutDefaultFigmaExtensions(token));
             }
           } else {
-            newTokens.push(token);
+            newTokens.push(withoutDefaultFigmaExtensions(token));
           }
         });
       });
@@ -506,7 +587,9 @@ export const tokenState = createModel<RootModel>()({
       const index = state.tokens[data.parent].findIndex((token) => token.name === nameToFind);
       const newArray = [...state.tokens[data.parent]];
       newArray[index] = {
-        ...omit(newArray[index], 'description'),
+        ...omit(newArray[index], 'description', '$extensions'),
+        // The editor explicitly sends deprecation keys to clear them; a Figma value import leaves metadata untouched.
+        ...('deprecated' in data || '$deprecated' in data ? { deprecated: undefined, $deprecated: undefined } : {}),
         ...updateTokenPayloadToSingleToken(data),
       } as SingleToken;
       return {
@@ -796,35 +879,6 @@ export const tokenState = createModel<RootModel>()({
         dispatch.tokenState.updateDocument({ shouldUpdateNodes: rootState.settings.updateOnChange });
       }
 
-      if (payload.shouldUpdate && rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        const tokenSet = rootState.tokenState.tokens[payload.parent];
-        if (tokenSet) {
-          const updatedSet = tokenSet.map((token) => {
-            if (token.name === payload.oldName) {
-              return {
-                name: payload.name,
-                description: payload.description,
-                value: payload.value,
-                type: payload.type,
-                $extensions: payload.$extensions,
-              } as SingleToken;
-            }
-            return token;
-          });
-
-          const rawSet = singleTokensToRawTokenSet(updatedSet, true);
-
-          pushToTokensStudio({
-            context: rootState.uiState.api as StorageTypeCredential<TokensStudioStorageType>,
-            action: 'UPDATE_TOKEN_SET',
-            data: {
-              raw: rawSet,
-              name: payload.parent,
-            },
-          });
-        }
-      }
-
       if (payload.shouldUpdate && rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         const tokenSet = rootState.tokenState.tokens[payload.parent];
         const token = tokenSet?.find((t) => t.name === payload.name);
@@ -839,6 +893,7 @@ export const tokenState = createModel<RootModel>()({
               type: token.type,
               description: token.description,
               token_set_id: (rootState.tokenState.tokenSetMetadata[payload.parent] as any)?.id,
+              $deprecated: getTokenDeprecation(token) || null,
             },
           });
         }
@@ -846,23 +901,6 @@ export const tokenState = createModel<RootModel>()({
     },
     deleteToken(payload: DeleteTokenPayload, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
-
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        const tokenSet = rootState.tokenState.tokens[payload.parent];
-        if (tokenSet) {
-          const newSet = tokenSet.filter((token) => token.name !== payload.path);
-          const rawSet = singleTokensToRawTokenSet(newSet, true);
-
-          pushToTokensStudio({
-            context: rootState.uiState.api as StorageTypeCredential<TokensStudioStorageType>,
-            action: 'UPDATE_TOKEN_SET',
-            data: {
-              raw: rawSet,
-              name: payload.parent,
-            },
-          });
-        }
-      }
 
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         if (payload.id) {
@@ -884,14 +922,6 @@ export const tokenState = createModel<RootModel>()({
     },
     addTokenSet(name: string, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
-
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        createTokenSetInTokensStudio({
-          rootState,
-          name,
-          onTokenSetCreated: dispatch.tokenState.setTokenSetMetadata,
-        });
-      }
 
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         pushToTokensStudioOAuth({
@@ -923,14 +953,6 @@ export const tokenState = createModel<RootModel>()({
     renameTokenSet(data: { oldName: string; newName: string }, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
 
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        updateTokenSetInTokensStudio({
-          rootState,
-          data,
-          onTokenSetUpdated: dispatch.tokenState.setTokenSetMetadata,
-        });
-      }
-
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         const tokenSetId = (rootState.tokenState.tokenSetMetadata[data.oldName] as any)?.id;
         if (tokenSetId) {
@@ -948,14 +970,6 @@ export const tokenState = createModel<RootModel>()({
     deleteTokenSet(name: string, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
 
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        deleteTokenSetFromTokensStudio({
-          rootState,
-          name,
-          onTokenSetDeleted: dispatch.tokenState.setTokenSetMetadata,
-        });
-      }
-
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         const tokenSetId = (rootState.tokenState.tokenSetMetadata[name] as any)?.id;
         if (tokenSetId) {
@@ -971,14 +985,6 @@ export const tokenState = createModel<RootModel>()({
     },
     setTokenSetOrder(data: string[], rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
-
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        pushToTokensStudio({
-          context: rootState.uiState.api as StorageTypeCredential<TokensStudioStorageType>,
-          action: 'UPDATE_TOKEN_SET_ORDER',
-          data: data.map((name, index) => ({ path: name, orderIndex: index })),
-        });
-      }
 
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         data.forEach((name, index) => {
@@ -1020,13 +1026,6 @@ export const tokenState = createModel<RootModel>()({
     duplicateToken(payload: DuplicateTokenPayload, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
 
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        duplicateTokenInTokensStudio({
-          rootState,
-          payload,
-        });
-      }
-
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         const tokenSet = rootState.tokenState.tokens[payload.parent];
         const token = tokenSet?.find((t) => t.name === payload.newName);
@@ -1039,6 +1038,7 @@ export const tokenState = createModel<RootModel>()({
               value: token.value,
               type: token.type,
               description: token.description,
+              $deprecated: getTokenDeprecation(token),
               token_set_id: (rootState.tokenState.tokenSetMetadata[payload.parent] as any)?.id,
             },
           });
@@ -1047,13 +1047,6 @@ export const tokenState = createModel<RootModel>()({
     },
     createToken(payload: UpdateTokenPayload, rootState) {
       dispatch.tokenState.updateDocument({ shouldUpdateNodes: false });
-
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        createTokenInTokensStudio({
-          rootState,
-          payload,
-        });
-      }
 
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         const tokenSet = rootState.tokenState.tokens[payload.parent];
@@ -1067,6 +1060,7 @@ export const tokenState = createModel<RootModel>()({
               value: token.value,
               type: token.type,
               description: token.description,
+              $deprecated: getTokenDeprecation(token),
               token_set_id: (rootState.tokenState.tokenSetMetadata[payload.parent] as any)?.id,
             },
           });
@@ -1120,7 +1114,8 @@ export const tokenState = createModel<RootModel>()({
         }
 
         // Check if there are unsaved changes before updating
-        if (rootState.uiState.storageType.provider !== StorageProviderType.TOKENS_STUDIO) {
+        // Tokens Studio OAuth pushes every change immediately via REST — skip local-change tracking
+        if (rootState.uiState.storageType.provider !== StorageProviderType.TOKENS_STUDIO_OAUTH) {
           const { lastSyncedState } = rootState.tokenState;
           const hasChanges = !compareLastSyncedState(
             rootState.tokenState.tokens,
@@ -1200,19 +1195,6 @@ export const tokenState = createModel<RootModel>()({
       const { updatedTokens, updatedSets } = updateAliasesInState(rootState.tokenState.tokens, data);
 
       dispatch.tokenState.setUpdatedAliases(updatedTokens);
-
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        for (const set of updatedSets) {
-          const content = updatedTokens[set];
-          const rawSet = singleTokensToRawTokenSet(content, true);
-
-          pushToTokensStudio({
-            context: rootState.uiState.api as StorageTypeCredential<TokensStudioStorageType>,
-            action: 'UPDATE_TOKEN_SET',
-            data: { raw: rawSet, name: set },
-          });
-        }
-      }
 
       if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO_OAUTH) {
         for (const set of updatedSets) {
@@ -1317,20 +1299,6 @@ export const tokenState = createModel<RootModel>()({
         shouldUpdateNodes: false,
         updateRemote: true,
       });
-
-      // If using Tokens Studio storage, update remote data
-      if (rootState.uiState.api?.provider === StorageProviderType.TOKENS_STUDIO) {
-        for (const [oldName, newName] of renamedCollections) {
-          if (oldName in rootState.tokenState.tokens
-            || Object.keys(updatedTokens).some((key) => key === newName)) {
-            updateTokenSetInTokensStudio({
-              rootState,
-              data: { oldName, newName },
-              onTokenSetUpdated: dispatch.tokenState.setTokenSetMetadata,
-            });
-          }
-        }
-      }
     },
     ...Object.fromEntries(Object.entries(tokenStateEffects).map(([key, factory]) => [key, factory(dispatch)])),
   }),

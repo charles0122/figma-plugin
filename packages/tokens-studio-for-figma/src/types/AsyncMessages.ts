@@ -51,6 +51,7 @@ export enum AsyncMessageTypes {
   CANCEL_OPERATION = 'async/cancel-operation',
   RESIZE_WINDOW = 'async/resize-window',
   SET_SHOW_EMPTY_GROUPS = 'async/set-show-empty-groups',
+  SET_HIDE_DEPRECATED_TOKENS = 'async/set-hide-deprecated-tokens',
   SET_UI = 'async/set-ui',
   CREATE_ANNOTATION = 'async/create-annotation',
   UPDATE = 'async/update',
@@ -77,10 +78,12 @@ export enum AsyncMessageTypes {
   RESOLVE_VARIABLE_INFO = 'async/resolve-variable-info',
   ATTACH_LOCAL_VARIABLES_TO_THEME = 'async/attach-local-variables-to-theme',
   RENAME_VARIABLES = 'async/rename-variables',
+  REMOVE_VARIABLES = 'async/remove-variables',
   UPDATE_VARIABLES = 'async/update-variables',
   SET_INITIAL_LOAD = 'async/set-initial-load',
   PREVIEW_REQUEST_STARTUP = 'async/preview-request-startup',
   GET_AVAILABLE_VARIABLE_COLLECTIONS = 'async/get-available-variable-collections',
+  CHECK_FIGMA_ENTERPRISE = 'async/check-figma-enterprise',
 }
 
 export type AsyncMessage<T extends AsyncMessageTypes, P = unknown> = P & { type: T };
@@ -181,6 +184,9 @@ export type CancelOperationAsyncMessageResult = AsyncMessage<AsyncMessageTypes.C
 export type SetShowEmptyGroupsAsyncMessage = AsyncMessage<AsyncMessageTypes.SET_SHOW_EMPTY_GROUPS, { showEmptyGroups: boolean; }>;
 export type SetShowEmptyGroupsAsyncMessageResult = AsyncMessage<AsyncMessageTypes.SET_SHOW_EMPTY_GROUPS>;
 
+export type SetHideDeprecatedTokensAsyncMessage = AsyncMessage<AsyncMessageTypes.SET_HIDE_DEPRECATED_TOKENS, { hideDeprecatedTokens: boolean; }>;
+export type SetHideDeprecatedTokensAsyncMessageResult = AsyncMessage<AsyncMessageTypes.SET_HIDE_DEPRECATED_TOKENS>;
+
 export type SetUiAsyncMessage = AsyncMessage<AsyncMessageTypes.SET_UI, SettingsState>;
 export type SetUiAsyncMessageResult = AsyncMessage<AsyncMessageTypes.SET_UI>;
 
@@ -265,7 +271,7 @@ export type SetInitialLoadMessageResult = AsyncMessage<AsyncMessageTypes.SET_INI
 export type AttachLocalStylesToTheme = AsyncMessage<AsyncMessageTypes.ATTACH_LOCAL_STYLES_TO_THEME, {
   theme: ThemeObject
   tokens: Record<string, AnyTokenList>
-  category: 'typography' | 'colors' | 'effects' | 'all'
+  category: 'typography' | 'colors' | 'effects' | 'gradients' | 'all'
   settings?: Partial<SettingsState>
 }>;
 export type AttachLocalStylesToThemeResult = AsyncMessage<AsyncMessageTypes.ATTACH_LOCAL_STYLES_TO_THEME, ThemeObject>;
@@ -305,6 +311,11 @@ export type GetAvailableVariableCollectionsMessageResult = AsyncMessage<AsyncMes
   collections: VariableCollectionInfo[]
 }>;
 
+export type CheckFigmaEnterpriseMessage = AsyncMessage<AsyncMessageTypes.CHECK_FIGMA_ENTERPRISE>;
+export type CheckFigmaEnterpriseMessageResult = AsyncMessage<AsyncMessageTypes.CHECK_FIGMA_ENTERPRISE, {
+  isFigmaEnterprise: boolean;
+}>;
+
 export type RemoveStylesWithoutConnectionMessage = AsyncMessage<AsyncMessageTypes.REMOVE_STYLES_WITHOUT_CONNECTION, {
   usedStyleIds: string[]
 }>;
@@ -336,7 +347,9 @@ export type CreateLocalVariablesAsyncMessage = AsyncMessage<AsyncMessageTypes.CR
   tokens: Record<string, AnyTokenList>;
   settings: SettingsState,
   selectedThemes?: string[]
-  serverResolvedTokens?: Record<string, string> | null;
+  // Keyed by theme.id — one flat delta per mode, so multi-mode export writes
+  // per-mode values instead of clobbering every mode with the active theme.
+  serverResolvedTokens?: Record<string, Record<string, string>> | null;
 }>;
 export type CreateLocalVariablesAsyncMessageResult = AsyncMessage<AsyncMessageTypes.CREATE_LOCAL_VARIABLES, {
   variableIds: Record<string, LocalVariableInfo>
@@ -377,6 +390,13 @@ export type RenameVariablesAsyncMessage = AsyncMessage<AsyncMessageTypes.RENAME_
 }>;
 export type RenameVariablesAsyncMessageResult = AsyncMessage<AsyncMessageTypes.RENAME_VARIABLES, {
   renameVariableToken: RenameVariableToken[];
+}>;
+
+export type RemoveVariablesAsyncMessage = AsyncMessage<AsyncMessageTypes.REMOVE_VARIABLES, {
+  variableKeys: string[];
+}>;
+export type RemoveVariablesAsyncMessageResult = AsyncMessage<AsyncMessageTypes.REMOVE_VARIABLES, {
+  variableKeys: string[];
 }>;
 
 export type UpdateVariablesAsyncMessage = AsyncMessage<AsyncMessageTypes.UPDATE_VARIABLES, {
@@ -429,6 +449,7 @@ export type AsyncMessages =
   | ResizeWindowAsyncMessage
   | CancelOperationAsyncMessage
   | SetShowEmptyGroupsAsyncMessage
+  | SetHideDeprecatedTokensAsyncMessage
   | SetUiAsyncMessage
   | CreateAnnotationAsyncMessage
   | CreateLivingDocumentationAsyncMessage
@@ -443,6 +464,7 @@ export type AsyncMessages =
   | SetNoneValuesOnNodeAsyncMessage
   | GetFigmaFontsMessage
   | GetAvailableVariableCollectionsMessage
+  | CheckFigmaEnterpriseMessage
   | SetAuthDataMessage
   | SetUsedEmailMessage
   | CreateLocalVariablesAsyncMessage
@@ -450,6 +472,7 @@ export type AsyncMessages =
   | ResolveVariableInfo
   | AttachLocalVariablesToTheme
   | RenameVariablesAsyncMessage
+  | RemoveVariablesAsyncMessage
   | UpdateVariablesAsyncMessage
   | PreviewRequestStartupAsyncMessage
   | RemoveRelaunchDataMessage
@@ -483,6 +506,7 @@ export type AsyncMessageResults =
   | ResizeWindowAsyncMessageResult
   | CancelOperationAsyncMessage
   | SetShowEmptyGroupsAsyncMessageResult
+  | SetHideDeprecatedTokensAsyncMessageResult
   | SetUiAsyncMessageResult
   | CreateAnnotationAsyncMessageResult
   | CreateLivingDocumentationAsyncMessageResult
@@ -497,6 +521,7 @@ export type AsyncMessageResults =
   | SetNoneValuesOnNodeAsyncMessageResult
   | GetFigmaFontsMessageResult
   | GetAvailableVariableCollectionsMessageResult
+  | CheckFigmaEnterpriseMessageResult
   | SetAuthDataMessageResult
   | SetUsedEmailMessageResult
   | CreateLocalVariablesAsyncMessageResult
@@ -504,6 +529,7 @@ export type AsyncMessageResults =
   | ResolveVariableInfoResult
   | AttachLocalVariablesToThemeResult
   | RenameVariablesAsyncMessageResult
+  | RemoveVariablesAsyncMessageResult
   | UpdateVariablesAsyncMessageResult
   | PreviewRequestStartupAsyncMessageResult
   | RemoveRelaunchDataMessageResult

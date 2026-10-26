@@ -1,5 +1,5 @@
 import { TokenTypes } from '@/constants/TokenTypes';
-import { SingleToken } from '@/types/tokens';
+import { DeprecatedProperty, SingleToken } from '@/types/tokens';
 import {
   isSingleBorderToken,
   isSingleBoxShadowToken,
@@ -34,7 +34,7 @@ export type TokenInJSON<T extends TokenTypes = any, V = any> = {
     $type: T;
     $value: V;
     $description?: string;
-    $deprecated?: boolean | string;
+    $deprecated?: boolean | string | DeprecatedProperty;
   }
 );
 
@@ -46,7 +46,7 @@ export type Tokens =
     $type?: TokenTypes;
     $value?: SingleToken['value'];
     $description?: string;
-    $deprecated?: boolean | string;
+    $deprecated?: boolean | string | DeprecatedProperty;
   };
 
 // @TODO fix typings
@@ -210,7 +210,8 @@ export default function convertToTokenArray({ tokens, shouldNormalize = false }:
     if ('$value' in token) delete token.$value;
     if ('$description' in token) delete token.$description;
     if ('$type' in token) delete token.$type;
-    if ('$deprecated' in token) delete token.$deprecated;
+    // Only legacy primitives become `deprecated`; upstream metadata must survive parsing.
+    if (typeof token.$deprecated === 'boolean' || typeof token.$deprecated === 'string') delete token.$deprecated;
     return token;
   });
 }

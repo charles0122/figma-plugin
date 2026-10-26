@@ -1,4 +1,6 @@
-import { findMatchingReferences, findReferences, replaceReferences, findReverseReferences } from './findReferences';
+import {
+  findMatchingReferences, findReferences, replaceReferences, findReverseReferences,
+} from './findReferences';
 import { TokenTypes } from '@/constants/TokenTypes';
 import { SingleToken } from '@/types/tokens';
 
@@ -65,11 +67,21 @@ describe('replaceReferences', () => {
 
 describe('findReverseReferences', () => {
   const mockTokens: SingleToken[] = [
-    { name: 'colors.primary', value: '#ff0000', type: TokenTypes.COLOR, internal__Parent: 'global' },
-    { name: 'colors.secondary', value: '{colors.primary}', type: TokenTypes.COLOR, internal__Parent: 'global' },
-    { name: 'colors.tertiary', value: 'rgba({colors.primary}, 0.5)', type: TokenTypes.COLOR, internal__Parent: 'global' },
-    { name: 'spacing.small', value: '8px', type: TokenTypes.SPACING, internal__Parent: 'global' },
-    { name: 'typography.heading', value: { fontFamily: '{fonts.primary}', fontSize: '16px' }, type: TokenTypes.TYPOGRAPHY, internal__Parent: 'theme' },
+    {
+      name: 'colors.primary', value: '#ff0000', type: TokenTypes.COLOR, internal__Parent: 'global',
+    },
+    {
+      name: 'colors.secondary', value: '{colors.primary}', type: TokenTypes.COLOR, internal__Parent: 'global',
+    },
+    {
+      name: 'colors.tertiary', value: 'rgba({colors.primary}, 0.5)', type: TokenTypes.COLOR, internal__Parent: 'global',
+    },
+    {
+      name: 'spacing.small', value: '8px', type: TokenTypes.SPACING, internal__Parent: 'global',
+    },
+    {
+      name: 'typography.heading', value: { fontFamily: '{fonts.primary}', fontSize: '16px' }, type: TokenTypes.TYPOGRAPHY, internal__Parent: 'theme',
+    },
   ] as SingleToken[];
 
   it('finds tokens that reference the specified token', () => {
@@ -91,8 +103,12 @@ describe('findReverseReferences', () => {
 
   it('finds references in complex token values like typography', () => {
     const tokensWithFontRef: SingleToken[] = [
-      { name: 'fonts.primary', value: 'Inter', type: TokenTypes.FONT_FAMILIES, internal__Parent: 'global' },
-      { name: 'typography.heading', value: { fontFamily: '{fonts.primary}', fontSize: '16px' }, type: TokenTypes.TYPOGRAPHY, internal__Parent: 'theme' },
+      {
+        name: 'fonts.primary', value: 'Inter', type: TokenTypes.FONT_FAMILIES, internal__Parent: 'global',
+      },
+      {
+        name: 'typography.heading', value: { fontFamily: '{fonts.primary}', fontSize: '16px' }, type: TokenTypes.TYPOGRAPHY, internal__Parent: 'theme',
+      },
     ] as SingleToken[];
 
     const references = findReverseReferences('fonts.primary', tokensWithFontRef);
